@@ -5,6 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "faiss-cpu>=1.11.0",
     "fastapi>=0.115.13",
     "langchain-mcp-adapters>=0.1.7",
     "langchain-openai>=0.3.25",
@@ -15,5 +16,6 @@ dependencies = [
     "python-dotenv>=1.1.1",
     "scikit-learn>=1.7.0",
     "seaborn>=0.13.2",
+    "sentence-transformers>=5.0.0",
     "tavily-python>=0.7.8",
 ]
