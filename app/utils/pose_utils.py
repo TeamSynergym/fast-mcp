@@ -83,11 +83,6 @@ class PoseVisualizer:
                 cv2.putText(image, kp_name, (x + 10, y - 10), 
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA) # 키포인트 이름 텍스트
         
-        # 요청된 경우 저장
-        if save_path:
-            cv2.imwrite(save_path, image)
-            print(f"✅ 주석이 추가된 이미지가 {save_path}에 저장되었습니다.")
-        
         return image
     
 

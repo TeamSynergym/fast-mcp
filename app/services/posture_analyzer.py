@@ -3,18 +3,22 @@ import numpy as np
 from ultralytics import YOLO
 from typing import Dict, Optional
 import os
-
+import ollama
+import requests  # 'googletrans' 대신 'requests'를 임포트합니다.
 
 class PostureAnalyzer:
-    def __init__(self, model_path: str = "models/yolopose_v1.pt"):
+    def __init__(self, model_path: str = "models/yolopose_v1.pt"
+                 , ollama_model: str = "llama3"):
         """
         자세 분석기를 학습된 YOLO 모델로 초기화합니다.
         
         Args:
             model_path: 학습된 YOLO 포즈 모델의 경로
+            ollama_model: 사용할 Ollama 모델 이름
         """
         self.model_path = model_path
         self.model = None
+        self.ollama_model = ollama_model
         self.load_model()
     
     def load_model(self):
@@ -392,7 +396,6 @@ class PostureAnalyzer:
                 scores['거북목score'] = 0
                 feedback['neck_error'] = "거북목 분석에 필요한 (귀, 어깨) 키포인트가 부족하여 계산할 수 없습니다."
             
-
         else:
             feedback['error'] = f"'{mode}'는 유효한 모드가 아닙니다. 'front' 또는 'side'를 사용하세요."
 
@@ -401,3 +404,69 @@ class PostureAnalyzer:
             feedback['overall'] = "전체적으로 매우 좋은 자세를 유지하고 있습니다! 👍"
 
         return {"scores": scores, "feedback": feedback, "measurements": measurements}
+    
+    def _translate_to_korean(self, text: str) -> str:
+        """
+        영문을 한국어로 번역하는 헬퍼 함수 (mymemory API 사용)
+        """
+        if not text:
+            return ""
+        try:
+            url = "https://api.mymemory.translated.net/get"
+            params = {"q": text, "langpair": "en|ko"}
+            resp = requests.get(url, params=params)
+            resp.raise_for_status()  # HTTP 오류 발생 시 예외 발생
+            
+            response_data = resp.json()
+            translated_text = response_data.get("responseData", {}).get("translatedText", "")
+
+            # API가 가끔 원문을 그대로 반환하는 경우를 처리
+            if not translated_text or translated_text.lower() == text.lower():
+                # 간단한 대체 번역 또는 실패 메시지 반환
+                print(f"번역 API가 유효한 번역을 반환하지 못했습니다. 응답: {response_data}")
+                return f"[번역 실패] 원문: {text}"
+                
+            return translated_text
+
+        except requests.exceptions.RequestException as e:
+            print(f"번역 API 요청 중 오류 발생: {e}")
+            return f"[번역 실패] 원문: {text}"
+        except Exception as e:
+            print(f"번역 처리 중 예기치 않은 오류 발생: {e}")
+            return f"[번역 실패] 원문: {text}"
+
+    def generate_ollama_diagnosis(self, analysis_data: Dict, mode: str) -> str:
+        """
+        Ollama로부터 영문 진단을 받고, 이를 한국어로 번역하는 방식.
+        """
+        scores = analysis_data.get('scores', {})
+        feedback = analysis_data.get('feedback', {})
+        
+        # 프롬프트를 영어로 작성하여 더 정확한 영문 답변 유도
+        prompt_parts = []
+        prompt_parts.append(
+            "You are a posture analysis expert. Based on the provided scores and feedback, "
+            "give a friendly and CONCISE diagnosis. IMPORTANT: Keep your entire response under 450 characters."
+        )
+        prompt_parts.append("Please provide specific advice on areas that need improvement. Maintain a positive and encouraging tone.")
+        prompt_parts.append(f"\n## Analysis Mode: {mode.capitalize()} View")
+        prompt_parts.append(f"\n### Posture Scores: {scores}")
+        prompt_parts.append(f"\n### Feedback: {feedback}")
+        
+        full_prompt = "\n".join(prompt_parts)
+
+        try:
+            # 1. Ollama에 영어로 답변 요청
+            response = ollama.chat(model=self.ollama_model, messages=[
+                {'role': 'user', 'content': full_prompt}
+            ])
+            english_diagnosis = response['message']['content']
+            
+            # 2. 받은 영문 답변을 한국어로 번역
+            korean_diagnosis = self._translate_to_korean(english_diagnosis)
+
+        except Exception as e:
+            korean_diagnosis = f"Ollama 진단 메시지를 생성하는 데 실패했습니다. 오류: {e}"
+            print(f"Ollama API call failed: {e}")
+
+        return korean_diagnosis
