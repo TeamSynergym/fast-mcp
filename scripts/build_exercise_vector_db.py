@@ -16,7 +16,8 @@ def load_exercise_data(csv_path):
         'name': row.get('name'),
         'description': row.get('description'),
         'difficulty': row.get('difficulty'),
-        'body_part': row.get('body_part')
+        'body_part': row.get('body_part'),
+        'category': row.get('category')
       })
   return documents
 
