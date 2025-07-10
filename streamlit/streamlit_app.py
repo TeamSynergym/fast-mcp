@@ -98,6 +98,13 @@ def main():
                             
                             if analysis_result["success"]:
                                 st.success(f"✅ {analysis_result['num_people']} 명 감지됨")
+                                
+                                 # --- Ollama 진단 메시지 생성 ---
+                                for i, person_data in enumerate(analysis_result["pose_data"]):
+                                    st.session_state.ollama_diagnosis = analyzer.generate_ollama_diagnosis(person_data, analysis_mode)
+                                    person_data['ollama_diagnosis'] = st.session_state.ollama_diagnosis # 결과에 진단 메시지 추가
+                                # --- Ollama 진단 메시지 생성 끝 ---
+                                
                                 st.session_state.pose_result = analysis_result # 분석 결과 세션 상태에 저장
                             else:
                                 st.error(f"❌ 분석 실패: {analysis_result.get('error', '알 수 없는 오류')}")
@@ -210,6 +217,14 @@ def main():
 
                     else:
                         st.info("ℹ️ 피드백이 없습니다.")
+
+                    # --- Ollama 진단 메시지 출력 ---
+                    st.subheader("🤖 Ollama AI 진단")
+                    if 'ollama_diagnosis' in pose_data and pose_data['ollama_diagnosis']:
+                        st.markdown(pose_data['ollama_diagnosis'])
+                    else:
+                        st.info("Ollama AI 진단 메시지가 생성되지 않았습니다.")
+                    # --- Ollama 진단 메시지 출력 끝 ---
 
 
                     # 키포인트 표시
