@@ -1,10 +1,8 @@
 import cv2
 import numpy as np
 from ultralytics import YOLO
-from typing import List, Dict, Tuple, Optional
+from typing import Dict, Optional
 import os
-import math
-import torch
 
 
 class PostureAnalyzer:
@@ -35,11 +33,15 @@ class PostureAnalyzer:
         """
         이미지에서 자세를 감지합니다.
         
+        변경 사항: 여러 사람이 감지될 경우, 가장 높은 전체 키포인트 신뢰도를 가진
+                  한 사람의 키포인트만 추출하여 반환합니다.
+        
         Args:
             image_path: 이미지 파일 경로
             
         Returns:
-            자세 감지 결과를 포함하는 딕셔너리
+            자세 감지 결과를 포함하는 딕셔너리.
+            'keypoints'는 가장 신뢰도 높은 한 사람의 키포인트 배열을 포함하는 리스트입니다.
         """
         if self.model is None:
             raise ValueError("모델이 로드되지 않았습니다.")
@@ -48,14 +50,36 @@ class PostureAnalyzer:
             # 추론 실행
             results = self.model(image_path)
             
-            # 키포인트 추출
-            keypoints = self._extract_keypoints(results)
+            highest_confidence_kp = None
+            max_avg_confidence = -1
+
+            for result in results:
+                if hasattr(result, 'keypoints') and result.keypoints is not None:
+                    for kp_data_for_person in result.keypoints.data.cpu().numpy():
+                        # 각 사람의 키포인트 데이터에서 신뢰도만 추출
+                        confidences = kp_data_for_person[:, 2]
+                        
+                        # 0.1보다 큰 신뢰도 값을 가진 키포인트만 평균에 포함
+                        confident_kps = confidences[confidences > 0.1]
+                        
+                        if len(confident_kps) > 0:
+                            avg_confidence = np.mean(confident_kps)
+                        else:
+                            avg_confidence = 0 # 신뢰도 있는 키포인트가 없으면 평균 0
+
+                        # 현재 사람의 평균 신뢰도가 지금까지의 최대값보다 높으면 업데이트
+                        if avg_confidence > max_avg_confidence:
+                            max_avg_confidence = avg_confidence
+                            highest_confidence_kp = kp_data_for_person
             
+            # keypoints가 비어있으면 (사람이 감지되지 않으면) num_people = 0
+            num_people_detected = 1 if highest_confidence_kp is not None else 0 
+
             return {
                 "success": True,
-                "keypoints": keypoints,
+                "keypoints": [highest_confidence_kp] if highest_confidence_kp is not None else [], # 단일 사람의 키포인트 배열을 리스트에 담아 반환
                 "image_path": image_path,
-                "num_people": len(keypoints)
+                "num_people": num_people_detected
             }
             
         except Exception as e:
@@ -67,63 +91,56 @@ class PostureAnalyzer:
     
     def analyze_posture(self, image_path: str, mode: str = 'front') -> Dict:
         """
-        이미지 내 각 사람의 자세를 감지하고 분석합니다.
-        
-        변경사항:
-            mode 인자를 추가하여 'front' 또는 'side' 분석 모드를 선택할 수 있습니다.
-            분석 결과 구조에 상세 분석 내용 포함
-                -> 기존: score, status, recommendation
-                -> 변경: keypoints, scores, feedback(딕셔너리: 항목별 문석 결과 제공), measurements
+        이미지 내 사람의 자세를 감지하고 분석합니다.
         
         Args:
             image_path: 이미지 파일 경로
-            mode: 'front'는 정면 분석, 'side'는 측면(시상면) 분석
+            mode: 'front'는 정면 분석, 'side'는 측면 분석
             
         Returns:
-            감지된 모든 사람에 대한 자세 분석 결과를 포함하는 딕셔너리.
-            각 사람의 분석에는 'keypoints', 'scores', 'feedback', 'measurements'가 포함됩니다.
+            감지된 한 사람에 대한 자세 분석 결과를 포함하는 딕셔너리.
+            분석에는 'keypoints', 'scores', 'feedback', 'measurements'가 포함됩니다.
         """
         pose_detection_result = self.detect_pose(image_path)
         
         if not pose_detection_result["success"]:
             return pose_detection_result # 감지 실패 시 오류 반환
-        
-        all_pose_data = []
-        for i, keypoints_array_for_person in enumerate(pose_detection_result["keypoints"]):
-            # 상세 키포인트 딕셔너리 가져오기
-            keypoints_dict = self._get_keypoints_only(keypoints_array_for_person)
-            
-            # 상세 자세 분석 수행
-            analysis_results = self._analyze_single_posture(keypoints_array_for_person, mode=mode)
-            
-            # 이 사람에 대한 모든 정보 결합
-            person_analysis = {
-                "person_id": i,
-                "keypoints": keypoints_dict["keypoints"], # 키포인트 딕셔너리
-                "num_keypoints": keypoints_dict["num_keypoints"],
-                "scores": analysis_results["scores"],
-                "feedback": analysis_results["feedback"],
-                "measurements": analysis_results["measurements"]
+
+        # 사람이 감지되지 않았으면 빈 결과 반환
+        if not pose_detection_result["keypoints"]:
+            return {
+                "success": True,
+                "pose_data": [],
+                "image_path": image_path,
+                "num_people": 0
             }
-            all_pose_data.append(person_analysis)
+            
+        all_pose_data = []
+        keypoints_array_for_person = pose_detection_result["keypoints"][0] 
+        
+        # 상세 키포인트 딕셔너리 가져오기
+        keypoints_dict = self._get_keypoints_only(keypoints_array_for_person)
+        
+        # 상세 자세 분석 수행
+        analysis_results = self._analyze_single_posture(keypoints_array_for_person, mode=mode)
+        
+        # 이 사람에 대한 모든 정보 결합
+        person_analysis = {
+            "person_id": 0, # 한 명만 분석하므로 ID는 0으로 고정
+            "keypoints": keypoints_dict["keypoints"], # 키포인트 딕셔너리
+            "num_keypoints": keypoints_dict["num_keypoints"],
+            "scores": analysis_results["scores"],
+            "feedback": analysis_results["feedback"],
+            "measurements": analysis_results["measurements"]
+        }
+        all_pose_data.append(person_analysis)
         
         return {
             "success": True,
-            "pose_data": all_pose_data, # 각 사람에 대한 분석 결과 리스트
+            "pose_data": all_pose_data, # 단일 사람에 대한 분석 결과 리스트
             "image_path": image_path,
             "num_people": len(all_pose_data)
         }
-    
-    def _extract_keypoints(self, results) -> List[np.ndarray]:
-        """YOLO 결과에서 감지된 모든 사람에 대한 키포인트 (x, y, confidence)를 추출합니다."""
-        keypoints_list = []
-        
-        for result in results:
-            if hasattr(result, 'keypoints') and result.keypoints is not None:
-                for kp_data in result.keypoints.data.cpu().numpy():
-                    keypoints_list.append(kp_data)
-        
-        return keypoints_list
 
     def _get_keypoints_only(self, keypoints: np.ndarray) -> Dict:
         """
@@ -156,14 +173,13 @@ class PostureAnalyzer:
     def _calculate_angle(self, p1, p2, p3):
         """
         세 점 사이의 각도를 계산합니다.
-        
-        변경사항:
-            기존코드 -> 단순 각도 비교
-            변경 -> 각도, 기울기, 수직 편차, 신뢰도 기반 조건 등을 추가
         """
-        p1_coords, p2_coords, p3_coords = np.array(p1)[:2], np.array(p2)[:2], np.array(p3)[:2]
+        # Ensure coordinates are extracted as 2-element arrays (x, y)
+        p1_coords = np.array(p1, dtype=np.float32)[:2]
+        p2_coords = np.array(p2, dtype=np.float32)[:2]
+        p3_coords = np.array(p3, dtype=np.float32)[:2]
         
-        # 키포인트가 0,0인 경우 (감지되지 않았거나 신뢰도 낮은 경우) 기본값 180 반환
+        # Check if any coordinate set is effectively zero (indicating undetected or invalid keypoint)
         if np.all(p1_coords == 0) or np.all(p2_coords == 0) or np.all(p3_coords == 0):
             return 180.0
 
@@ -182,10 +198,6 @@ class PostureAnalyzer:
     def _calculate_balanced_score(self, value, grade_info):
         """
         이상적인 값으로부터의 편차를 기반으로 균형 잡힌 점수를 계산합니다.
-        
-        변경사항:
-            기존: 0~1 점수
-            변경: 0~100 점수로 변경, 편차 기반 등급별 점수 산정
         """
         ideal = grade_info['ideal']
         grades = grade_info['grades'] # (최대 편차, 현재 점수 최소값) 튜플 리스트
@@ -210,10 +222,6 @@ class PostureAnalyzer:
     def _analyze_single_posture(self, keypoints: np.ndarray, mode: str = 'front', config: Optional[Dict] = None) -> Dict:
         """
         단일 사람의 자세를 분석합니다.
-        
-        변경사항: 
-            평가지표 기존 3개 - 머리 위치, 어깨 정렬, 등 정렬
-            5개로 확장 - 몸통 기울기, 어깨 기울기, 골반 기울기, 거북목 각도, 척추 굽음 각도
         """
         keypoints_xy = keypoints[:, :2] # x, y 좌표만 추출
 
@@ -250,7 +258,7 @@ class PostureAnalyzer:
             l_shoulder = keypoints_xy[L_SHOULDER]
             r_shoulder = keypoints_xy[R_SHOULDER]
             l_hip = keypoints_xy[L_HIP]
-            r_hip = keypoints_xy[R_HIP] # 이전 오류 수정: L_HIP이 아닌 R_HIP이어야 함
+            r_hip = keypoints_xy[R_HIP] 
 
             min_conf_front = 0.3 # 정면 분석 최소 신뢰도
             # 필요한 키포인트의 신뢰도 확인
