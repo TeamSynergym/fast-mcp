@@ -7,6 +7,8 @@ requires-python = ">=3.13"
 dependencies = [
     "faiss-cpu>=1.11.0",
     "fastapi>=0.115.13",
+    "google-api-python-client>=2.176.0",
+    "langchain>=0.3.26",
     "langchain-mcp-adapters>=0.1.7",
     "langchain-openai>=0.3.25",
     "langgraph>=0.4.10",
@@ -23,4 +25,5 @@ dependencies = [
     "streamlit>=1.46.1",
     "tavily-python>=0.7.8",
     "ultralytics>=8.3.162",
+    "youtube-transcript-api>=1.1.1",
 ]
