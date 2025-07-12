@@ -18,6 +18,7 @@ class AgentState(TypedDict, total=False):
     reply: Optional[str]
     script_summary: Optional[Dict[str, str | List[str]]]
     comment_summary: Optional[str]
+    comment_count: int
 
 graph_builder = StateGraph(AgentState)
 
@@ -110,21 +111,3 @@ def continue_with_memory(graph, initial_state, config: dict, update: dict):
     previous_state = initial_state
     new_state = {**previous_state, **update}
     return graph.invoke(new_state, config=config)
-
-# %%
-# config = {"configurable": {"thread_id": "1"}}
-# url = 'https://youtu.be/sLe6jgHoYtk?si=BP39AJQL1PvIoWBe'
-
-
-# # %%
-# initial_state = {'url': url}
-# step1_state = graph.invoke(initial_state, config=config)
-# print("📄 스크립트 요약 결과:")
-# print(step1_state.get("script_summary", ""))
-
-# # %%
-# step2_state = continue_with_memory(graph, graph_memory, config, {"reply": "응", "url": step1_state.get("url")})
-# print("\n💬 댓글 요약 결과:")
-# print(step2_state.get("comment_summary", ""))
-
-
