@@ -286,8 +286,8 @@ class PostureAnalyzer:
             else:
                 torso_tilt_angle = np.degrees(np.arctan(abs(dx_torso) / abs(dy_torso)))
 
-            measurements['torso_tilt_angle'] = torso_tilt_angle
-            scores['척추휨score'] = self._calculate_balanced_score(torso_tilt_angle, config['torso_tilt_grades'])
+            measurements['torso_tilt_angle'] = float(torso_tilt_angle)
+            scores['척추휨score'] = int(self._calculate_balanced_score(torso_tilt_angle, config['torso_tilt_grades']))
             if torso_tilt_angle > config['torso_tilt_feedback_threshold']:
                 feedback['torso_tilt'] = f"몸통이 {torso_tilt_angle:.1f}° 옆으로 기울어 '주의'가 필요합니다."
 
@@ -309,15 +309,15 @@ class PostureAnalyzer:
 
             # 어깨 기울기 분석
             shoulder_tilt_angle = get_tilt_angle(l_shoulder, r_shoulder)
-            measurements['shoulder_tilt_angle'] = shoulder_tilt_angle
-            scores['어깨score'] = self._calculate_balanced_score(shoulder_tilt_angle, config['shoulder_tilt_grades'])
+            measurements['shoulder_tilt_angle'] = float(shoulder_tilt_angle)
+            scores['어깨score'] = int(self._calculate_balanced_score(shoulder_tilt_angle, config['shoulder_tilt_grades']))
             if shoulder_tilt_angle > config['shoulder_tilt_feedback_threshold']:
                 feedback['shoulder_tilt'] = f"어깨가 {shoulder_tilt_angle:.1f}° 기울어져 '주의'가 필요합니다."
 
             # 골반 기울기 분석
             hip_tilt_angle = get_tilt_angle(l_hip, r_hip)
-            measurements['hip_tilt_angle'] = hip_tilt_angle
-            scores['골반틀어짐score'] = self._calculate_balanced_score(hip_tilt_angle, config['hip_tilt_grades'])
+            measurements['hip_tilt_angle'] = float(hip_tilt_angle)
+            scores['골반틀어짐score'] = int(self._calculate_balanced_score(hip_tilt_angle, config['hip_tilt_grades']))
             if hip_tilt_angle > config['hip_tilt_feedback_threshold']:
                 feedback['hip_tilt'] = f"골반이 {hip_tilt_angle:.1f}° 기울어져 '주의'가 필요합니다."
 
@@ -369,8 +369,8 @@ class PostureAnalyzer:
                 else:
                     back_deviation = np.degrees(np.arctan(abs(dx_sh) / abs(dy_sh)))
                 
-                measurements['back_angle'] = back_deviation # 수직선으로부터의 편차로 저장
-                scores['척추굽음score'] = self._calculate_balanced_score(back_deviation, config['back_bend_grades'])
+                measurements['back_angle'] = float(back_deviation) # 수직선으로부터의 편차로 저장
+                scores['척추굽음score'] = int(self._calculate_balanced_score(back_deviation, config['back_bend_grades']))
                 
                 # 수직선으로부터의 편차를 기반으로 피드백
                 if back_deviation > config['back_bend_feedback_threshold']:
@@ -388,8 +388,8 @@ class PostureAnalyzer:
                 # 이 내부 각도를 이용하여 거북목 각도를 계산합니다 (180도에서 내부 각도 빼기).
                 neck_forward_angle = 180 - internal_neck_angle
 
-                measurements['neck_forward_angle'] = neck_forward_angle
-                scores['거북목score'] = self._calculate_balanced_score(neck_forward_angle, config['neck_forward_angle_grades'])
+                measurements['neck_forward_angle'] = float(neck_forward_angle)
+                scores['거북목score'] = int(self._calculate_balanced_score(neck_forward_angle, config['neck_forward_angle_grades']))
                 if neck_forward_angle > config['neck_forward_angle_feedback_threshold']:
                     feedback['head_forward'] = f"목이 앞으로 {neck_forward_angle:.1f}° 기울어져 '주의'가 필요합니다."
             else:
@@ -469,4 +469,7 @@ class PostureAnalyzer:
             korean_diagnosis = f"Ollama 진단 메시지를 생성하는 데 실패했습니다. 오류: {e}"
             print(f"Ollama API call failed: {e}")
 
-        return korean_diagnosis
+        return {
+            "english": english_diagnosis,
+            "korean": korean_diagnosis
+        }
