@@ -9,14 +9,9 @@ from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, START, END
 from youtube_transcript_api import YouTubeTranscriptApi
 from pydantic import BaseModel, Field
+from googleapiclient.discovery import build
+import os
 
-# %%
-load_dotenv()
-
-# %%
-llm = ChatOpenAI(model="gpt-4o", streaming=True)
-
-# %%
 class YoutubeSummary(BaseModel):
     """유튜브 스크립트 요약을 위한 데이터 구조"""
     summary: str = Field(description="영상의 핵심 내용을 1~2 문장으로 요약")
@@ -24,7 +19,14 @@ class YoutubeSummary(BaseModel):
     routine: List[str] = Field(description="운동 루틴의 각 단계를 설명하는 리스트")
     target_body_parts: List[str] = Field(description="주요 자극 신체 부위 리스트")
 
+
+llm = ChatOpenAI(model="gpt-4o-mini", streaming=True)
 structured_llm = llm.with_structured_output(YoutubeSummary)
+
+# YouTube Data API 초기화
+YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
+youtube = build("youtube", "v3", developerKey=YOUTUBE_API_KEY)
+
 
 class AgentState(TypedDict):
     """
@@ -39,6 +41,7 @@ class AgentState(TypedDict):
     url: str
     transcript: str
     script_summary: YoutubeSummary
+    comment_count: int
     error: str
 
 graph_builder = StateGraph(AgentState)
@@ -55,6 +58,30 @@ def extract_video_id(url):
         return parsed_url.path.split('/')[-1]
     
     return None
+
+def get_video_stats(state: AgentState) -> dict:
+    """URL에서 영상 ID를 추출하고, 영상의 총 댓글 수를 확인합니다."""
+    url = state.get("url")
+    try:
+        video_id = extract_video_id(url)
+        if not video_id:
+            raise ValueError("유효한 유튜브 URL에서 Video ID를 추출할 수 없습니다.")
+
+        request = youtube.videos().list(part="statistics", id=video_id)
+        response = request.execute()
+
+        if not response.get("items"):
+            raise ValueError("API로부터 영상 정보를 가져올 수 없습니다.")
+
+        stats = response["items"][0].get("statistics", {})
+        comment_count = int(stats.get("commentCount", 0))
+
+        return {"video_id": video_id, "comment_count": comment_count}
+
+    except Exception as e:
+        error_message = f"ERROR: 영상 정보 확인 중 오류 발생 - {e}"
+        print(f"   - 🚨 {error_message}")
+        return {"error": error_message}
 
 # %%
 def get_youtube_transcript(state: AgentState) -> dict:
@@ -81,7 +108,7 @@ def get_youtube_transcript(state: AgentState) -> dict:
             print(f"⚠️ 자막 크기 초과. 일부만 사용 (최대 15000자)")
             transcript_text = transcript_text[:15000]
 
-        print("✅ 1. 자막 추출 성공")
+        print("")
         return {"transcript": transcript_text, "error": None}
 
     except Exception as e:
@@ -146,11 +173,13 @@ def route_after_transcript(state: AgentState) -> str:
         return "summarize_transcript"
 
 # %%
+graph_builder.add_node("get_video_stats", get_video_stats)
 graph_builder.add_node("summarize_transcript", summarize_transcript)
 graph_builder.add_node("get_youtube_transcript", get_youtube_transcript)
 
 # %%
-graph_builder.add_edge(START, "get_youtube_transcript")
+graph_builder.add_edge(START, "get_video_stats")
+graph_builder.add_edge("get_video_stats", "get_youtube_transcript")
 graph_builder.add_conditional_edges(
     "get_youtube_transcript",
     route_after_transcript,
@@ -206,13 +235,3 @@ def run_agent(url: str):
     except json.JSONDecodeError:
         print("⚠️ JSON 파싱 실패. 원본 content 출력:")
         print(content)
-
-# # %%
-# test_url = "https://youtu.be/sLe6jgHoYtk?si=BP39AJQL1PvIoWBe"
-# print(f"입력 URL: {test_url}\n---")
-# run_agent(test_url)
-
-# # %%
-
-
-

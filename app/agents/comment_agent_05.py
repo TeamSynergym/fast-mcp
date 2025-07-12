@@ -1,54 +1,114 @@
-# %% [markdown]
-# ## Node 기반 그래프 방식(수정)
-
 # %%
 import os
 import json
 from typing import TypedDict, List
+from pydantic import BaseModel, Field
 from urllib.parse import urlparse, parse_qs
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
-from langchain.prompts import PromptTemplate
-from langchain_core.output_parsers import StrOutputParser
+from langchain_core.messages import SystemMessage, HumanMessage
 from langgraph.graph import StateGraph, START, END
+import googleapiclient.discovery
 
+class Sentiment(BaseModel):
+    """전반적인 감성 분석 결과"""
+    description: str = Field(description="댓글의 전반적인 분위기와 여론을 1~2문장으로 요약")
+    positive_percentage: int = Field(description="긍정적인 반응의 비율 (0-100 사이의 정수)")
+
+class CommentSummary(BaseModel):
+    """
+    유튜브 댓글 요약을 위한 최종 데이터 구조.
+    LLM은 이 구조에 맞춰서만 답변해야 합니다.
+    """
+    overall_sentiment: Sentiment = Field(description="댓글의 전반적인 감성 분석 결과")
+    key_topics: List[str] = Field(description="댓글에서 가장 자주 언급되는 핵심 주제 목록 (이모지 포함)")
+    user_tips: List[str] = Field(description="사용자들이 공유하는 유용한 팁 목록")
+    faq: List[str] = Field(description="사용자들이 자주 묻는 질문(FAQ) 목록")
 
 # %%
-# 상태(state) 정의
+# 상태(state) 정의: 총 댓글 수 필드 추가
 class CommentState(TypedDict):
     url: str
+    video_id: str
+    total_comment_count: int
     comments: List[str]
-    comment_summary: str
+    comment_summary: CommentSummary
     error: str
 
-# %%
-# 환경 변수 로드 및 LLM 준비
 load_dotenv()
-llm = ChatOpenAI(model="gpt-4o", streaming=True)
+llm = ChatOpenAI(model="gpt-4o-mini", streaming=True)
+structured_llm = llm.with_structured_output(CommentSummary)
 
+api_key = os.getenv("YOUTUBE_API_KEY")
+youtube = googleapiclient.discovery.build("youtube", "v3", developerKey=api_key)
+    
 # %%
-# video_id 추출 함수 (내부용)
+# video_id 추출 함수
 def extract_video_id(url: str) -> str:
-    parsed_url = urlparse(url)
-    if parsed_url.hostname and "youtube.com" in parsed_url.hostname:
-        query_string = parse_qs(parsed_url.query)
-        return query_string.get("v", [None])[0]
-    elif parsed_url.hostname and "youtu.be" in parsed_url.hostname:
-        return parsed_url.path[1:]
-    return None
+    """
+    URL에서 ID를 추출
+    """
+    if not isinstance(url, str):
+        return None
+
+    video_id = url.split('watch?v=')[-1]
+    print(f"  -> ID 추출 성공! (결과: {video_id})")
+    return video_id
 
 # %%
-# 노드 1: video_id로 댓글 수집
-def fetch_comments(state: CommentState) -> dict:
-    import googleapiclient.discovery
-    url = state.get("url", "")
+# 노드 1: 영상 ID 추출 및 총 댓글 수 확인
+def get_video_stats(state: CommentState) -> dict:
+    """URL에서 영상 ID를 추출하고, 영상의 총 댓글 수를 확인합니다."""
+    print("➡️ [1] 영상 정보 확인 시작...")
+    url = state.get("url")
     try:
         video_id = extract_video_id(url)
         if not video_id:
             raise ValueError("유효한 유튜브 URL에서 Video ID를 추출할 수 없습니다.")
-        print(f"✅ 영상 ID 추출 성공: {video_id}")
-        api_key = os.getenv("YOUTUBE_API_KEY")
-        youtube = googleapiclient.discovery.build("youtube", "v3", developerKey=api_key)
+        print(f"  - 영상 ID 추출 성공: {video_id}")
+
+        # videos().list API를 호출하여 통계 정보(댓글 수) 가져오기
+        request = youtube.videos().list(part="statistics", id=video_id)
+        response = request.execute()
+
+        if not response.get("items"):
+            raise ValueError("API로부터 영상 정보를 가져올 수 없습니다.")
+
+        stats = response["items"][0].get("statistics", {})
+        total_comment_count = int(stats.get("commentCount", 0))
+        print(f"  - ✅ 총 댓글 수 확인: {total_comment_count}개")
+
+        return {"video_id": video_id, "total_comment_count": total_comment_count}
+
+    except Exception as e:
+        error_message = f"ERROR: 영상 정보 확인 중 오류 발생 - {e}"
+        print(f"  - 🚨 {error_message}")
+        return {"error": error_message}
+
+# %%
+# 조건부 라우터: 댓글 수에 따라 분기
+def check_comment_count(state: CommentState) -> str:
+    """총 댓글 수에 따라 다음 단계를 결정합니다."""
+    print("➡️ [2] 댓글 수 확인 및 분기...")
+    if state.get("error"):
+        print("  - 🚨 오류가 감지되어 프로세스를 종료합니다.")
+        return "end" # 오류 발생 시 종료
+
+    total_comment_count = state.get("total_comment_count", 0)
+    if total_comment_count < 10:
+        print(f"  - 💬 댓글 수가 {total_comment_count}개로 10개 미만입니다. 요약을 제공하지 않습니다.")
+        return "no_summary" # 10개 미만이면 요약 안 함
+    else:
+        print(f"  - ✅ 댓글 수가 {total_comment_count}개입니다. 댓글 내용 수집을 시작합니다.")
+        return "fetch_comments" # 10개 이상이면 댓글 수집
+
+# %%
+# 노드 2: 댓글 내용 수집
+def fetch_comments(state: CommentState) -> dict:
+    """commentThreads API를 사용해 실제 댓글 내용을 가져옵니다."""
+    print("➡️ [3] 댓글 내용 수집 중...")
+    video_id = state.get("video_id")
+    try:
         request = youtube.commentThreads().list(
             part="snippet", videoId=video_id, maxResults=100, order="relevance"
         )
@@ -58,78 +118,80 @@ def fetch_comments(state: CommentState) -> dict:
             for item in response['items']
         ]
         if not comments:
-            raise ValueError("댓글이 없습니다.")
-        print(f"✅ 1. 댓글 {len(comments)}개 수집 성공")
-        return {"url": url, "comments": comments, "comment_summary": "", "error": ""}
+            raise ValueError("댓글이 없습니다.") # 댓글 수는 10개 이상인데 가져온 내용이 없는 경우
+        print(f"  - ✅ 댓글 {len(comments)}개 수집 성공")
+        return {"comments": comments}
     except Exception as e:
-        error_message = f"ERROR: 댓글 수집 중 오류 발생 - {e}"
-        print(f"🚨 {error_message}")
-        return {"url": url, "comments": [], "comment_summary": "", "error": error_message}
+        error_message = f"ERROR: 댓글 내용 수집 중 오류 발생 - {e}"
+        print(f"  - 🚨 {error_message}")
+        return {"error": error_message}
 
 # %%
-# 노드 2: 댓글 요약 생성
-def summarize_comments(state: CommentState) -> dict:
-    comments = state.get("comments", [])
-    url = state.get("url", "")
-    video_id = extract_video_id(url)
-    comments_str = "\n- ".join(comments)
-    prompt = PromptTemplate.from_template(
-        """당신은 주어진 유튜브 댓글들을 분석하여 요약내용을 JSON 형식으로 생성하는 AI 전문가입니다.
-        댓글은 한국어와 영어가 섞여 있을 수 있습니다. 영어가 있다면 내용을 파악하여 자연스러운 한국어 기반으로 번역하고 요약에 포함시켜야 합니다.
+# 노드 3: 요약 불가 처리
+def handle_no_summary(state: CommentState) -> dict:
+    """댓글 수가 적어 요약을 제공하지 않음을 처리합니다."""
+    summary_message = "댓글 개수가 10개 미만으로 댓글 요약을 제공하지 않습니다."
+    return {"comment_summary": summary_message}
 
-        [분석할 댓글 내용]
-        - {comments_str}
+# %%
+# 댓글 요약 생성
+def summarize_comments_node(state: CommentState) -> dict:
+    """
+    댓글을 분석하여 Pydantic 모델 형식의 구조화된 요약을 생성합니다.
+    """
+    print("➡️ [Comment Agent] 댓글 요약 생성 시작...")
+    comments_text = state.get("comments")
 
-        [분석 대상 영상 ID]
-        {video_id}
+    prompt = f"""
+    당신은 유튜브 영상의 댓글들을 분석하여 유용한 정보를 추출하고 구조화된 JSON 형식으로 요약하는 전문가입니다.
+    아래 댓글 모음을 바탕으로, 요청된 JSON 스키마에 맞춰 각 항목을 채워주세요.
 
-        ## 아래 JSON 형식을 준수하여 응답해주세요:
-        - "description"은 2문장이 넘어가지 않도록 핵심만을 담아 **개조식**으로 작성, **댓글 내용이 긍정적인지, 부정적인지는 말하지 않아도 됨**
-        - "positivie_percentage"는 긍정적인 키워드와 부정적인 키워드를 모두 분석해서 전체 키워드 중 긍정적인 키워드가 몇퍼센트인지 정확하게 분석해서 정수형으로 답변
-        - "key_topics", "user_tips", "faq" 모두 핵심만을 담아 2개만 추출
-        {{
-          "overall_sentiment": {{"description": "📝 전반적인 댓글 내용을 요약 서술", "positive_percentage": "👍 긍정 반응의 비율(%)"}},
-          "key_topics": ["🏷️ 주요 키워드 1", "🏷️ 주요 키워드 2"],
-          "user_tips": ["💡 사용자 팁 요약 1", "💡 사용자 팁 요약 2"],
-          "faq": ["❓ 자주 묻는 질문 요약 1", "❓ 자주 묻는 질문 요약 2"]
-        }}"""
-    )
+    [분석할 댓글 모음]
+    ---
+    {comments_text}
+    ---
+    """
     try:
-        chain = prompt | llm | StrOutputParser()
-        comment_summary = chain.invoke({"comments_str": comments_str, "video_id": video_id})
-        print(f"✅ 2. 요약 생성 성공")
-        return {"url": url, "comment_summary": comment_summary}
+        # LLM을 호출하면, LangChain이 자동으로 Pydantic 모델 객체를 반환
+        summary_result: CommentSummary = structured_llm.invoke([
+            SystemMessage(content="You are an expert at summarizing YouTube comments into a structured JSON format."),
+            HumanMessage(content=prompt)
+        ])
+        print("✅ 댓글 요약 생성 및 구조화 성공!")
+        return {"comment_summary": summary_result.dict()}
+
     except Exception as e:
-        error_message = f"ERROR: 요약 중 에러 발생 - {e}"
+        error_message = f"ERROR: 댓글 요약 생성 중 오류 발생 - {e}"
         print(f"🚨 {error_message}")
-        return {"url": url, "comment_summary": "", "error": error_message}
+        return {"error": error_message}
 
-# %%
-# 에러 분기 함수
-def route_after_fetch(state: CommentState) -> str:
-    if state.get("error"):
-        print("🚨 오류가 감지되어 프로세스를 종료합니다.")
-        return END
-    else:
-        print("✅ 댓글 수집 성공. 요약 단계로 이동합니다.")
-        return "summarize_comments"
-
-# %%
-# 그래프(graph) 생성
 builder = StateGraph(CommentState)
-builder.add_node("fetch_comments", fetch_comments)
-builder.add_node("summarize_comments", summarize_comments)
 
-builder.add_edge(START, "fetch_comments")
-builder.add_conditional_edges("fetch_comments", route_after_fetch, {
-    "summarize_comments": "summarize_comments",
-    END: END
-})
+# 노드
+builder.add_node("get_video_stats", get_video_stats)
+builder.add_node("fetch_comments", fetch_comments)
+builder.add_node("handle_no_summary", handle_no_summary)
+builder.add_node("summarize_comments", summarize_comments_node)
+
+# 엣지(연결)
+builder.set_entry_point("get_video_stats")
+
+builder.add_conditional_edges(
+    "get_video_stats",
+    check_comment_count,
+    {
+        "fetch_comments": "fetch_comments", # 댓글 수 많으면 -> 내용 수집
+        "no_summary": "handle_no_summary",   # 댓글 수 적으면 -> 요약 불가 처리
+        "end": END                         # 에러 나면 -> 종료
+    }
+)
+
+builder.add_edge("fetch_comments", "summarize_comments")
+builder.add_edge("handle_no_summary", END)
 builder.add_edge("summarize_comments", END)
 
 graph = builder.compile()
 
-graph
 
 # %%
 # 결과 출력 함수
@@ -160,6 +222,11 @@ def run_agent(url: str):
         print("⚠️ 요약 결과가 비어 있습니다. content 값:", repr(content))
         return
 
+    # "댓글 개수가 10개 미만..." 메시지는 JSON 파싱 없이 바로 출력
+    if "댓글 개수가 10개 미만" in content:
+        print(content)
+        return
+
     # LLM 응답에서 마크다운 코드 블록 제거
     if content.strip().startswith("```json"):
         start_index = content.find('{')
@@ -173,11 +240,3 @@ def run_agent(url: str):
     except json.JSONDecodeError:
         print("⚠️ JSON 파싱 실패. 원본 content 출력:")
         print(content)
-
-# %%
-# 테스트 실행 예시
-if __name__ == "__main__":
-    youtube_url = input("유튜브 영상 URL을 입력하세요: ")
-    run_agent(youtube_url)
-
-

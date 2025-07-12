@@ -44,6 +44,7 @@ class SupervisorGraphState(TypedDict):
     recommended_exercise: Dict[str, Any]
     chatbot_result: Dict[str, Any]
     youtube_summary: Optional[Dict[str, Any]]
+    comment_count: int
     final_output: Dict[str, Any]
     error: Optional[str]
     
@@ -51,6 +52,9 @@ class SupervisorGraphState(TypedDict):
     user_response: Optional[str]  # 사용자의 응답
     youtube_thread_id: Optional[str]  # YouTube agent의 스레드 ID
     youtube_config: Optional[Dict[str, Any]]  # YouTube agent 설정
+    
+    # 재검색 시 제외할 URL 리스트
+    tried_video_urls: list[str]
 
 # --- 3. LangGraph 노드 함수 재정의 ---
 
@@ -78,13 +82,13 @@ def recommend_exercise_node(state: SupervisorGraphState) -> Dict[str, Any]:
         
         # LLM을 사용해 진단 내용에서 핵심 키워드를 추출하여 검색 쿼리 생성
         prompt = f"""아래의 자세 진단 내용에 가장 적합한 '단 한 가지'의 검색어을 추천해줘. 
-        ~난이도, ~효과를 가진, ~운동의 순서로 검색어를 작성해야해.
+        ~난이도, ~효과를 가진, ~부위의, ~운동의 순서로 검색어를 작성해야해.
         VectorDB 검색에 사용할 키워드 문장 오직 한개만 간결하게 한 줄로 답해줘.
         
         [진단 내용]
         {diagnosis_text}
         [출력 예시]
-        - 중급 난이도의 유연성을 높이는 효과를 가진 스트레칭 운동
+        - 중급 난이도의 유연성을 높이는 효과를 가진 골반 부위의 스트레칭 운동
         [생성된 검색어]
         """
         llm_query = llm.invoke(prompt).content.strip()
@@ -111,23 +115,39 @@ def video_search_node(state: SupervisorGraphState) -> Dict[str, Any]:
     print(f"[Node 3 - 시도 {state['search_retries'] + 1}] 보충 영상 검색 중 (Youtube)...")
     if state.get("error"): return {}
     try:
+        # search_retries 값에 따라 분기 로직 추가
+        if state.get("search_retries", 0) > 0:
+            # 재검색일 경우 (search_retries > 0)
+            print("   > 영상 검증 실패로 재검색을 실행합니다. 이전 영상은 제외됩니다.")
+            tried_urls = state.get("tried_video_urls", [])
+        else:
+            # 초기 검색일 경우 (search_retries == 0)
+            print("   > 초기 영상 검색을 실행합니다.")
+            tried_urls = []
+            
         exercise_name = state["recommended_exercise"]["name"]
         if "자세" in exercise_name or "스트레칭" in exercise_name:
-            search_query = f"{exercise_name} 하는 법"
+            search_query = f"{exercise_name}"
         else:
-            search_query = f"{exercise_name} 운동 자세"
+            search_query = f"{exercise_name} 운동"
             
-        print(f"  > 원본 검색어: '{exercise_name}'")
-        print(f"  > ✅ 최종 유튜브 검색어: '{search_query}'")
+        print(f"  > 유튜브 검색어: '{search_query}'")
         
-        # 가공된 검색어로 챗봇 노드 실행
-        result = asyncio.run(chatbot_node.run(prompt=search_query))
+        result = asyncio.run(chatbot_node.run(prompt=search_query, exclude_urls=tried_urls))
+        
+        new_url = result.get("youtube_url")
         
         if not result.get("youtube_url") or "No video found" in result.get("youtube_url"):
             raise ValueError("추천 유튜브 영상을 찾지 못했습니다.")
 
         message = HumanMessage(content=f"유튜브 영상 검색 완료. URL: {result.get('youtube_url')}")
-        return {"chatbot_result": result, "messages": [message], "search_retries": state["search_retries"] + 1}
+        updated_tried_urls = tried_urls + [new_url]
+        return {
+            "chatbot_result": result, 
+            "messages": [message], 
+            "search_retries": state["search_retries"] + 1,
+            "tried_video_urls": updated_tried_urls # 상태 업데이트
+        }
     except Exception as e:
         return {"error": f"챗봇 액션 노드 오류: {e}"}
 
@@ -140,8 +160,15 @@ def summarize_video_node(state: SupervisorGraphState) -> Dict[str, Any]:
             raise ValueError(f"유튜브 요약 실패: {summary_result['error']}")
         
         summary = summary_result.get("script_summary")
-        message = HumanMessage(content="영상 요약 완료.")
-        return {"youtube_summary": summary, "messages": [message]}
+        
+        comment_count = summary_result.get("comment_count", 0)  # 댓글 수 반환(기본값 0)
+        
+        message = HumanMessage(content=f"영상 요약 완료. 댓글 수: {comment_count}")
+        return {
+            "youtube_summary": summary, 
+            "comment_count": comment_count,
+            "messages": [message]
+            }
     except Exception as e:
         return {"error": f"유튜브 요약 노드 오류: {e}"}
     
@@ -156,6 +183,7 @@ def validate_summary_node(state: SupervisorGraphState) -> Dict[str, Any]:
     summary_dict = state.get("youtube_summary", {})
     summary_text = json.dumps(summary_dict)
     diagnosis_text = state["diagnosis"]["korean"]
+    recommended_exercise = state["recommended_exercise"]["name"]
 
     # 요약이 너무 짧거나 없는 경우, 바로 부적합 판정
     if not summary_dict or len(summary_text) < 50:
@@ -165,12 +193,31 @@ def validate_summary_node(state: SupervisorGraphState) -> Dict[str, Any]:
 
     # LLM을 통한 관련성 검증
     structured_validator = llm.with_structured_output(ValidationResult)
-    prompt = f"""사용자의 자세 진단은 '{diagnosis_text}'입니다. 아래 유튜브 영상 요약이 이 진단과 관련이 있습니까?
-    
-    [영상 요약]
-    {summary_text}
-    
-    판단 결과와 이유를 JSON 형식으로 답해주세요."""
+    prompt = f"""
+당신은 사용자의 자세 교정을 위한 운동 영상을 필터링하는 AI 전문가입니다.
+
+[분석할 정보]
+- 자세 진단: '{diagnosis_text}'
+- 추천 운동: '{recommended_exercise}'
+- 추천 운동의 효과: '{state["recommended_exercise"].get("description", "효과 정보 없음")}'
+- 영상 요약: '{summary_text}'
+
+[수행할 작업]
+- '자세 진단'을 개선하고 '추천 운동'을 수행하는 데 '영상 요약'의 내용이 적합한지 판단해주세요.
+- 가장 먼저 제외조건에 해당하는 내용이 있는지 살펴보고, 해당할 시 반드시 관련없음으로 판단해야 합니다.
+- 또한 동영상의 내용과 '추천 운동의 효과'가 서로 관련있는지도 판단해야 합니다.
+
+[제외 조건]
+- **스포츠 전문 훈련:** 특정 스포츠(예: 축구, 야구, 골프, 수영)의 기술 향상을 위한 훈련은 '관련 없음'으로 처리합니다.
+
+[출력 형식]
+아래 JSON 형식에 따라, 판단 결과(`is_relevant`)와 구체적인 이유(`reason`)를 작성해주세요.
+
+{{
+  "is_relevant": <true 또는 false>,
+  "reason": "<판단 이유를 간단히 작성합니다.>"
+}}
+"""
     
     validation: ValidationResult = structured_validator.invoke(prompt)
     
@@ -202,9 +249,24 @@ def ask_user_response_node(state: SupervisorGraphState) -> Dict[str, Any]:
         "messages": [message]
     }
     
+def comment_summary_unavailable_node(state: SupervisorGraphState) -> Dict[str, Any]:
+    """댓글 수가 적어 요약 제공이 불가능함을 알리는 노드"""
+    print("[Node 5-3] 댓글 요약 제공 불가 안내")
+    
+    # 최종 결과에 표시될 메시지를 youtube_summary에 추가
+    updated_youtube_summary = state.get("youtube_summary", {})
+    if isinstance(updated_youtube_summary, dict):
+         updated_youtube_summary["comment_summary"] = "댓글 개수가 10개 미만으로 댓글 요약을 제공하지 않습니다."
+    
+    message = HumanMessage(content="댓글 요약 제공 불가: 댓글 수 부족")
+    return {
+        "messages": [message],
+        "youtube_summary": updated_youtube_summary
+    }
+    
 def rerun_youtube_agent_node(state: SupervisorGraphState) -> Dict[str, Any]:
     """사용자 응답을 바탕으로 YouTube agent를 재실행하는 노드"""
-    print("[Node 5-3] YouTube Agent 재실행 중...")
+    print("[Node 5-4] YouTube Agent 재실행 중...")
     
     try:
         # YouTube agent의 메모리 그래프 사용
@@ -250,12 +312,11 @@ def present_final_result_node(state: SupervisorGraphState) -> Dict[str, Any]:
                 "diagnosis": state.get("diagnosis", {}).get("korean"),
                 "details": state.get("pose_analysis_result")
             },
-            "primary_recommendation": state.get("recommended_exercise"), # DB 기반 추천
-            "supplementary_video": { # 유튜브 기반 추천
+            "primary_recommendation": state.get("recommended_exercise"), 
+            "supplementary_video": { 
                 "search_phrase": state.get("chatbot_result", {}).get("search_phrase"),
                 "youtube_url": state.get("chatbot_result", {}).get("youtube_url"),
-                "video_summary": state.get("youtube_summary"),
-                "comment_summary": state.get("youtube_summary", {}).get("comment_summary", None)
+                "video_summary": state.get("youtube_summary") or {}
             },            
         }
     print("\n--- 최종 결과 (JSON) ---")
@@ -276,8 +337,14 @@ def supervisor_node(state: SupervisorGraphState) -> Dict[str, str]:
     elif "영상 요약 완료" in last_message:
         return {"next_agent": "validate_summary"}
     elif "요약 검증 성공" in last_message:
-        # 검증 성공 후 사용자 응답 요청
-        return {"next_agent": "ask_user_response"}
+        # 검증 성공 후 댓글 수에 따라 분기
+        comment_count = state.get("comment_count", 0)
+        if comment_count >= 10:
+            print(f"  > 댓글 수({comment_count})가 10개 이상이므로 사용자에게 질문합니다.")
+            return {"next_agent": "ask_user_response"}
+        else:
+            print(f"  > 댓글 수({comment_count})가 10개 미만이므로 요약을 제공하지 않습니다.")
+            return {"next_agent": "comment_summary_unavailable"}
     elif "사용자 응답 수집 완료" in last_message:
         # 사용자 응답에 따라 분기
         user_response = state.get("user_response", "").lower()
@@ -290,6 +357,8 @@ def supervisor_node(state: SupervisorGraphState) -> Dict[str, str]:
             # 부정적 응답이면 바로 최종 결과로
             return {"next_agent": "present_final_result"}
     elif "YouTube 댓글 요약 완료" in last_message:
+        return {"next_agent": "present_final_result"}
+    elif "댓글 요약 제공 불가" in last_message: 
         return {"next_agent": "present_final_result"}
     elif "YouTube 재실행 실패" in last_message:
         return {"next_agent": "present_final_result"}
@@ -313,6 +382,7 @@ workflow.add_node("validate_summary", validate_summary_node)
 workflow.add_node("present_final_result", present_final_result_node)
 workflow.add_node("ask_user_response", ask_user_response_node)
 workflow.add_node("rerun_youtube_agent", rerun_youtube_agent_node)
+workflow.add_node("comment_summary_unavailable", comment_summary_unavailable_node)
 workflow.add_node("supervisor", supervisor_node)
 
 workflow.set_entry_point("analyze_user_pose")
@@ -323,6 +393,7 @@ workflow.add_edge("summarize_video", "supervisor")
 workflow.add_edge("validate_summary", "supervisor")
 workflow.add_edge("ask_user_response", "supervisor")
 workflow.add_edge("rerun_youtube_agent", "supervisor")
+workflow.add_edge("comment_summary_unavailable", "supervisor")
 
 workflow.add_conditional_edges(
     "supervisor",
@@ -334,6 +405,7 @@ workflow.add_conditional_edges(
         "validate_summary": "validate_summary",
         "ask_user_response": "ask_user_response",  
         "rerun_youtube_agent": "rerun_youtube_agent", 
+        "comment_summary_unavailable": "comment_summary_unavailable",
         "present_final_result": "present_final_result",
         "END": END
     }
@@ -345,9 +417,10 @@ app = workflow.compile()
 if __name__ == "__main__":
     initial_state = {
         "messages": [HumanMessage(content="자세 분석을 시작합니다.")],
-        "image_path": "app/services/images/test_front.jpg",
-        "analysis_mode": "front",
+        "image_path": "app/services/images/test_side.jpg",
+        "analysis_mode": "side",
         "search_retries": 0,
+        "comment_count": 0,
         "user_response": None,
         "youtube_thread_id": None,
         "youtube_config": None

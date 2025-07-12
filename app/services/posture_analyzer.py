@@ -445,8 +445,12 @@ class PostureAnalyzer:
         # 프롬프트를 영어로 작성하여 더 정확한 영문 답변 유도
         prompt_parts = []
         prompt_parts.append(
-            "You are a posture analysis expert. Based on the provided scores and feedback, "
-            "give a friendly and CONCISE diagnosis. IMPORTANT: Keep your entire response under 450 characters."
+            "You are a friendly and encouraging posture coach. Based on the user's posture scores and feedback, your goal is to provide a brief, positive, and easy-to-understand explanation."
+            "Follow this structure:"
+"1.  Identify the single most important area for improvement from the data."
+"2.  State this primary issue in simple, non-medical terms (e.g., 'forward head,' 'rounded shoulders')."
+"3.  Add a short, motivating sentence to encourage the user."
+"IMPORTANT: Your entire response must be under 450 characters. Be supportive and concise."
         )
         prompt_parts.append("Please provide specific advice on areas that need improvement. Maintain a positive and encouraging tone.")
         prompt_parts.append(f"\n## Analysis Mode: {mode.capitalize()} View")
