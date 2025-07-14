@@ -111,6 +111,32 @@ def recommend_exercise_node(state: SupervisorGraphState) -> Dict[str, Any]:
     except Exception as e:
         return {"error": f"운동 추천 노드 오류: {e}"}
 
+def ai_coach_interaction_node(state: SupervisorGraphState) -> Dict[str, Any]:
+    """AI 코치와의 대화 노드"""
+    print("[Node - AI 코치] 사용자와 대화 중...")
+    try:
+        diagnosis_text = state["diagnosis"]["korean"]
+        recommended_exercise = state["recommended_exercise"]["name"]
+        
+        prompt = f"""
+        당신은 AI 피트니스 코치입니다. 아래 정보를 바탕으로 사용자와 대화를 시작하세요.
+        
+        [진단 내용]
+        {diagnosis_text}
+        
+        [추천 운동]
+        {recommended_exercise}
+        
+        사용자에게 운동의 중요성과 자세 교정의 필요성을 설명하고, 동기부여를 제공하세요.
+        """
+        response = llm.invoke(prompt).content.strip()
+        print(f"  > AI 코치 응답: {response}")
+        
+        message = HumanMessage(content=f"AI 코치 대화 완료: {response}")
+        return {"messages": [message]}
+    except Exception as e:
+        return {"error": f"AI 코치 노드 오류: {e}"}
+
 def video_search_node(state: SupervisorGraphState) -> Dict[str, Any]:
     print(f"[Node 3 - 시도 {state['search_retries'] + 1}] 보충 영상 검색 중 (Youtube)...")
     if state.get("error"): return {}
@@ -331,7 +357,19 @@ def supervisor_node(state: SupervisorGraphState) -> Dict[str, str]:
     if "자세 분석 완료" in last_message:
         return {"next_agent": "recommend_exercise"}
     elif "DB 기반 운동 추천 완료" in last_message:
-        return {"next_agent": "video_search"}
+        # Branching logic: AI coach interaction or YouTube recommendation
+        user_choice = input("운동 추천 후 다음 단계 선택 (1: AI 코치와 대화, 2: 유튜브 영상 추천): ").strip()
+        if user_choice == "1":
+            return {"next_agent": "ai_coach_interaction"}
+        elif user_choice == "2":
+            return {"next_agent": "youtube_recommendation"}
+        else:
+            print("잘못된 입력입니다. 기본적으로 유튜브 영상 추천으로 진행합니다.")
+            return {"next_agent": "youtube_recommendation"}
+    elif "AI 코치 대화 완료" in last_message:
+        return {"next_agent": "present_final_result"}
+    elif "유튜브 영상 추천 완료" in last_message:
+        return {"next_agent": "summarize_video"}
     elif "유튜브 영상 검색 완료" in last_message:
         return {"next_agent": "summarize_video"}
     elif "영상 요약 완료" in last_message:
@@ -384,6 +422,7 @@ workflow.add_node("ask_user_response", ask_user_response_node)
 workflow.add_node("rerun_youtube_agent", rerun_youtube_agent_node)
 workflow.add_node("comment_summary_unavailable", comment_summary_unavailable_node)
 workflow.add_node("supervisor", supervisor_node)
+workflow.add_node("ai_coach_interaction", ai_coach_interaction_node)
 
 workflow.set_entry_point("analyze_user_pose")
 workflow.add_edge("analyze_user_pose", "supervisor")
@@ -394,6 +433,7 @@ workflow.add_edge("validate_summary", "supervisor")
 workflow.add_edge("ask_user_response", "supervisor")
 workflow.add_edge("rerun_youtube_agent", "supervisor")
 workflow.add_edge("comment_summary_unavailable", "supervisor")
+workflow.add_edge("ai_coach_interaction", "supervisor")
 
 workflow.add_conditional_edges(
     "supervisor",
@@ -407,6 +447,7 @@ workflow.add_conditional_edges(
         "rerun_youtube_agent": "rerun_youtube_agent", 
         "comment_summary_unavailable": "comment_summary_unavailable",
         "present_final_result": "present_final_result",
+        "ai_coach_interaction": "ai_coach_interaction",
         "END": END
     }
 )
