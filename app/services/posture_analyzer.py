@@ -4,11 +4,12 @@ from ultralytics import YOLO
 from typing import Dict, Optional
 import os
 import ollama
-import requests  # 'googletrans' 대신 'requests'를 임포트합니다.
+import requests  # Ensure requests is imported
+import json  # JSON 모듈 추가
 
 class PostureAnalyzer:
     def __init__(self, model_path: str = "models/yolopose_v1.pt"
-                 , ollama_model: str = "llama3"):
+                 , ollama_model: str = "llama3.2:latest"):
         """
         자세 분석기를 학습된 YOLO 모델로 초기화합니다.
         
@@ -435,7 +436,7 @@ class PostureAnalyzer:
             print(f"번역 처리 중 예기치 않은 오류 발생: {e}")
             return f"[번역 실패] 원문: {text}"
 
-    def generate_ollama_diagnosis(self, analysis_data: Dict, mode: str) -> str:
+    def generate_ollama_diagnosis(self, analysis_data: Dict, mode: str) -> Dict:
         """
         Ollama로부터 영문 진단을 받고, 이를 한국어로 번역하는 방식.
         """
@@ -447,10 +448,10 @@ class PostureAnalyzer:
         prompt_parts.append(
             "You are a friendly and encouraging posture coach. Based on the user's posture scores and feedback, your goal is to provide a brief, positive, and easy-to-understand explanation."
             "Follow this structure:"
-"1.  Identify the single most important area for improvement from the data."
-"2.  State this primary issue in simple, non-medical terms (e.g., 'forward head,' 'rounded shoulders')."
-"3.  Add a short, motivating sentence to encourage the user."
-"IMPORTANT: Your entire response must be under 450 characters. Be supportive and concise."
+            "1. Identify the single most important area for improvement from the data."
+            "2. State this primary issue in simple, non-medical terms (e.g., 'forward head,' 'rounded shoulders')."
+            "3. Add a short, motivating sentence to encourage the user."
+            "IMPORTANT: Your entire response must be under 450 characters. Be supportive and concise."
         )
         prompt_parts.append("Please provide specific advice on areas that need improvement. Maintain a positive and encouraging tone.")
         prompt_parts.append(f"\n## Analysis Mode: {mode.capitalize()} View")
@@ -459,21 +460,40 @@ class PostureAnalyzer:
         
         full_prompt = "\n".join(prompt_parts)
 
-        try:
-            # 1. Ollama에 영어로 답변 요청
-            response = ollama.chat(model=self.ollama_model, messages=[
-                {'role': 'user', 'content': full_prompt}
-            ])
-            english_diagnosis = response['message']['content']
-            
-            # 2. 받은 영문 답변을 한국어로 번역
-            korean_diagnosis = self._translate_to_korean(english_diagnosis)
+        # Initialize variables to handle exceptions
+        english_diagnosis = "Failed to generate diagnosis due to an error."
+        korean_diagnosis = "Ollama 진단 메시지를 생성하는 데 실패했습니다."
 
+        try:
+            # Ollama API 호출
+            url = "http://192.168.2.6:11434/api/chat"  # Update to the correct endpoint
+            headers = {"Content-Type": "application/json"}
+            payload = {
+                "model": self.ollama_model,
+                "messages": [{"role": "user", "content": full_prompt}]
+            }
+            
+            response = requests.post(url, json=payload, headers=headers, stream=True)
+            response.raise_for_status()  # Raise exception for HTTP errors
+            
+            # Collect streamed JSON objects
+            messages = []
+            for line in response.iter_lines():
+                if line:
+                    try:
+                        data = json.loads(line.decode("utf-8"))
+                        content = data.get("message", {}).get("content", "")
+                        messages.append(content)
+                    except json.JSONDecodeError:
+                        print(f"Skipping invalid JSON line: {line}")
+    
+            # Combine all messages into a single diagnosis
+            english_diagnosis = " ".join(messages).strip()
+            korean_diagnosis = self._translate_to_korean(english_diagnosis)
         except Exception as e:
-            korean_diagnosis = f"Ollama 진단 메시지를 생성하는 데 실패했습니다. 오류: {e}"
-            print(f"Ollama API call failed: {e}")
+            print(f"❌ Error: {e}")
+            korean_diagnosis += f" 오류: {e}"
 
         return {
-            "english": english_diagnosis,
             "korean": korean_diagnosis
         }

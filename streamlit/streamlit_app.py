@@ -268,9 +268,11 @@ def main():
                                 original_image_for_viz = original_image_for_viz.convert('RGB')
                             
                             with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp_viz_output:
+                                image_array = np.array(original_image_for_viz, dtype=np.uint8)
+
                                 visualizer.draw_pose_on_image(
-                                    np.array(original_image_for_viz), # 넘파이 배열로 변환
-                                    keypoints_dict,
+                                    image_array,
+                                    pose_data,
                                     tmp_viz_output.name # 시각화 결과 저장 경로
                                 )
                                 
@@ -280,7 +282,7 @@ def main():
                                 os.unlink(tmp_viz_output.name) # 임시 파일 삭제
                             
                         except Exception as e:
-                            st.error(f"❌ 시각화 생성 중 오류 발생: {e}")
+                            print(f"시각화 중 오류 발생: {e}")
                     else:
                         st.info("시각화를 보려면 이미지를 업로드하고 분석하세요.")
             else:
