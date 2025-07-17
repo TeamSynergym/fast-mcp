@@ -6,43 +6,12 @@ from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 
 from app.graph.state import ExerciseState
-from app.services.api_client import (
-    get_history_from_backend,
-    get_email_from_backend,
-    get_comparison_stats_from_backend,
-    save_achievement_to_backend,
-    save_goals_to_backend  # 추가
-)
 from app.services.notification import send_email_notification
 from config import LLM_MODEL_NAME
 
 # LLM 모델 초기화
 llm = ChatOpenAI(model=LLM_MODEL_NAME, temperature=0.7)
 llm_strict = ChatOpenAI(model=LLM_MODEL_NAME, temperature=0) # 분석/판단용
-
-def fetch_data_node(state: ExerciseState) -> dict:
-    """백엔드에서 운동 기록을 가져와 상태를 업데이트합니다."""
-    print("--- [Node 1] 운동 기록 가져오기 ---")
-    user_id = state["user_id"]
-    jwt_token = state["jwt_token"]
-    history = get_history_from_backend(user_id, jwt_token)
-    if history:
-        print(f"✅ 총 {len(history)}개의 운동 기록을 가져왔습니다.")
-    else:
-        print("🚨 운동 기록이 없거나 가져오는데 실패했습니다.")
-    return {"exercise_history": history}
-
-def fetch_email_node(state: ExerciseState) -> dict:
-    """백엔드에서 사용자 이메일을 가져와 상태를 업데이트합니다."""
-    print("--- [Node 2] 이메일 주소 가져오기 ---")
-    user_id = state["user_id"]
-    jwt_token = state["jwt_token"]
-    email = get_email_from_backend(user_id, jwt_token)
-    if email:
-        print(f"✅ 사용자 이메일({email})을 확인했습니다.")
-    else:
-        print("🚨 사용자 이메일을 가져오는데 실패했습니다.")
-    return {"user_email": email}
 
 def detect_fatigue_boredom_node(state: ExerciseState) -> dict:
     """운동 기록을 보고 피로 또는 지루함 징후를 감지합니다."""
@@ -157,7 +126,7 @@ def predict_slump_node(state: ExerciseState) -> dict:
 
     history_str = pd.DataFrame(history).to_string()
     prompt = ChatPromptTemplate.from_messages([
-        ("system", "당신은 운동 심리학자입니다. 사용자의 운동 기록 패턴(주기, 완료율 변화 등)을 분석하여 다음 주 또는 다음 달에 슬럼프에 빠질 위험도를 'low', 'medium', 'high'로 예측하고, 그 이유를 간략하게 JSON 형식으로만 답해주세요. 반드시 아래 형식만 사용하세요:\n\n"
+        ("system", "당신은 운동 심리학자입니다. 사용자의 운동 기록 패턴(주기, 완료율 변화 등)을 분석하여 다음 주 또는 다음 달에 슬럼프에 빠질 위험도를 'low', 'medium', 'high'로 예측하고, 그 이유를 간략하게 JSON 형식으로만 답변해주세요. 반드시 아래 형식만 사용하세요:\n\n"
                    "{{\n  \"risk\": \"low\" | \"medium\" | \"high\",\n  \"reason\": \"간단한 설명\"\n}}\n\n"
                    "추가 텍스트는 절대 포함하지 마세요."),
         ("human", "운동 기록:\n{history}\n\n예측 결과(JSON):")
@@ -174,13 +143,6 @@ def predict_slump_node(state: ExerciseState) -> dict:
         print(f"🚨 JSON 파싱 오류: {e}")
         print(f"🚨 원본 응답: {result.content}")  # 원본 응답 출력
         return {"slump_prediction": {"risk": "low", "reason": "분석 실패"}}
-
-def fetch_comparison_data_node(state: ExerciseState) -> dict:
-    """다른 사용자와의 진행도를 비교하는 데이터를 가져옵니다."""
-    print("--- [Node 4b] 익명화된 통계 비교 데이터 가져오기 ---")
-    stats = get_comparison_stats_from_backend(state['user_id'], state['jwt_token'])
-    print(f"📈 비교 데이터: {stats.get('comment')}")
-    return {"comparison_stats": stats}
 
 def analyze_records_node(state: ExerciseState) -> dict:
     """운동 기록, 슬럼프 예측, 비교 데이터를 종합 분석합니다."""
@@ -243,14 +205,28 @@ def suggest_goals_node(state: ExerciseState) -> dict:
     chain = prompt | llm
     result = chain.invoke({"analysis": state['analysis_result']})
     print(f"🤖 LLM 제안 (Raw): {result.content}")
-    return {"suggested_goals": result.content}
+
+    # Ensure 'suggested_goals' is always a valid JSON object
+    try:
+        suggested_goals = json.loads(result.content)
+    except json.JSONDecodeError:
+        print("🚨 LLM 응답이 유효한 JSON이 아닙니다. 기본값을 사용합니다.")
+        suggested_goals = {"weekly_goal": "기본 주간 목표", "monthly_goal": "기본 월간 목표"}
+
+    print(f"🤖 LLM 제안 (Parsed): {suggested_goals}")
+    return {"suggested_goals": suggested_goals}
 
 
 def wait_for_feedback_node(state: ExerciseState) -> dict:
     """사용자로부터 제안된 목표에 대한 피드백을 입력받습니다."""
     print("\n--- [Node 8] 사용자 피드백 대기 ---")
     try:
-        goals = json.loads(state['suggested_goals'])
+        # Check if 'suggested_goals' is already a dict
+        if isinstance(state['suggested_goals'], dict):
+            goals = state['suggested_goals']
+        else:
+            goals = json.loads(state['suggested_goals'])
+
         print("\n🤖 AI 코치가 제안하는 목표:")
         print(f"  - 주간: {goals.get('weekly_goal')}")
         print(f"  - 월간: {goals.get('monthly_goal')}\n")
@@ -311,27 +287,36 @@ def clean_json_string(s: str) -> str:
     return s
 
 def finalize_goal_node(state: ExerciseState) -> dict:
-    """최종 목표를 사용자에게 알리고 백엔드에 저장합니다."""
-    print("\n--- [Node 10] 최종 목표 확정 및 저장 ---")
-    final_goals_str = state['final_goals']
+    """최종 목표를 사용자에게 알리고 결과를 정리합니다."""
+    print("\n--- [Node 10] 최종 목표 확정 및 결과 정리 ---")
+    final_goals_input = state.get('final_goals')
     
-    cleaned_goals_str = clean_json_string(final_goals_str)
+    goals_dict = {}
+
+    # 💡 [핵심 수정] 입력 데이터의 타입에 따라 다르게 처리
+    if isinstance(final_goals_input, dict):
+        print("... 목표 데이터가 딕셔너리 형태입니다. 그대로 사용합니다.")
+        goals_dict = final_goals_input
+    elif isinstance(final_goals_input, str):
+        print("... 목표 데이터가 문자열입니다. JSON으로 파싱합니다.")
+        try:
+            cleaned_str = clean_json_string(final_goals_input)
+            goals_dict = json.loads(cleaned_str)
+        except json.JSONDecodeError:
+            print(f"🚨 JSON 파싱 오류 발생. 원본 문자열: {final_goals_input}")
+            # 파싱 실패 시, 앱이 중단되지 않도록 기본값 설정
+            goals_dict = {"weekly_goal": "파싱 오류", "monthly_goal": final_goals_input}
+    else:
+        raise TypeError(f"예상치 못한 목표 데이터 타입입니다: {type(final_goals_input)}")
 
     print("🎉 새로운 목표가 설정되었습니다! 꾸준히 도전해보세요!")
-    try:
-        goals = json.loads(cleaned_goals_str)
-        print(f"  - 주간: {goals.get('weekly_goal')}")
-        print(f"  - 월간: {goals.get('monthly_goal')}\n")
-    except (json.JSONDecodeError, KeyError):
-        print(f"  - 목표: {cleaned_goals_str}")
+    print(f"  - 주간: {goals_dict.get('weekly_goal', 'N/A')}")
+    print(f"  - 월간: {goals_dict.get('monthly_goal', 'N/A')}\n")
     
-    # 최종 목표를 백엔드에 저장
-    save_goals_to_backend(state['user_id'], state['jwt_token'], cleaned_goals_str)
+    # 최종적으로 state의 'final_goals'는 일관성을 위해 딕셔너리 형태로 저장합니다.
+    return {"final_goals": goals_dict}
 
-    # 'final_goals'를 state에 저장
-    state['final_goals'] = cleaned_goals_str
-
-    return {}
+# app/graph/nodes.py
 
 def provide_reward_node(state: ExerciseState) -> dict:
     """목표 달성 시 사용자에게 보상(이메일)을 제공합니다."""
@@ -342,52 +327,68 @@ def provide_reward_node(state: ExerciseState) -> dict:
         return {"is_goal_achieved": False}
 
     subject = "🎉 축하합니다! 운동 목표를 성공적으로 달성하셨습니다!"
-    try:
-        goals_dict = json.loads(state['final_goals'])
-        goals_text = f"  - 주간: {goals_dict.get('weekly_goal', 'N/A')}\n  - 월간: {goals_dict.get('monthly_goal', 'N/A')}"
-    except (json.JSONDecodeError, AttributeError):
-        goals_text = state['final_goals']
+    
+    # 💡 [핵심 수정] final_goals의 데이터 타입에 따라 처리합니다.
+    final_goals_data = state.get('final_goals', {})
+    goals_text = ""
+    
+    if isinstance(final_goals_data, dict):
+        # 이미 딕셔너리인 경우, 바로 값을 사용합니다.
+        goals_text = f"  - 주간: {final_goals_data.get('weekly_goal', 'N/A')}\n  - 월간: {final_goals_data.get('monthly_goal', 'N/A')}"
+    elif isinstance(final_goals_data, str):
+        # 문자열인 경우, 파싱을 시도합니다.
+        try:
+            goals_dict = json.loads(final_goals_data)
+            goals_text = f"  - 주간: {goals_dict.get('weekly_goal', 'N/A')}\n  - 월간: {goals_dict.get('monthly_goal', 'N/A')}"
+        except json.JSONDecodeError:
+            goals_text = final_goals_data # 파싱 실패 시 원본 문자열을 사용합니다.
+    else:
+        goals_text = "목표 정보를 불러올 수 없습니다."
 
-    body = (f"SynergyM의 {state['user_id']}님, 정말 대단해요!\n\n"
+    body = (f"SynergyM의 {state.get('user_id', '사용자')}님, 정말 대단해요!\n\n"
             f"꾸준한 노력으로 설정하신 아래의 목표를 달성하셨습니다.\n\n"
             f"✔ 달성한 목표:\n{goals_text}\n\n"
             "앞으로의 여정도 SynergyM이 함께 응원하겠습니다! 💪")
    
     badge_info = state.get("generated_badge")
     send_email_notification(subject, body, user_email, badge_info)
-   
-    # 뱃지 정보를 백엔드 '트로피룸'에 저장
-    if badge_info:
-        save_achievement_to_backend(state['user_id'], state['jwt_token'], badge_info)
 
     return {"is_goal_achieved": True}
 
 def generate_badge_node(state: ExerciseState) -> dict:
     """목표 달성 시 AI가 개인화된 뱃지를 생성합니다."""
     print("--- [Node 11] AI 뱃지 생성 ---")
-    final_goals = state.get("final_goals", "{}")
-    persona = state.get("coach_persona", "창의적인 동기부여 전문가")  # 페르소나 가져오기
-   
-    try:
-        monthly_goal = json.loads(final_goals).get("monthly_goal", "월간 목표")
-    except json.JSONDecodeError:
-        monthly_goal = "월간 목표"
+    final_goals_data = state.get("final_goals", {})
+    
+    monthly_goal_description = "월간 목표" # 기본값 설정
+
+    # 💡 [핵심 수정] final_goals 데이터의 타입을 확인하고 처리합니다.
+    if isinstance(final_goals_data, dict):
+        # 딕셔너리인 경우, 바로 값을 가져옵니다.
+        monthly_goal_description = final_goals_data.get("monthly_goal", "월간 목표")
+    elif isinstance(final_goals_data, str):
+        # 문자열인 경우, 파싱을 시도합니다.
+        try:
+            goals_dict = json.loads(final_goals_data)
+            monthly_goal_description = goals_dict.get("monthly_goal", "월간 목표")
+        except json.JSONDecodeError:
+            print(f"🚨 뱃지 생성 중 JSON 파싱 오류. 원본: {final_goals_data}")
+            monthly_goal_description = "값진 성과" # 파싱 실패 시 사용할 기본값
 
     prompt = ChatPromptTemplate.from_messages([
-        ("system", f"당신은 '{persona}'입니다. 사용자가 달성한 '월간 목표'를 바탕으로, 그럴듯하고 멋진 '뱃지 이름'과 '뱃지 설명'을 생성해주세요. "
-                   "설명은 1~2 문장으로 존댓말로 작성하고, 결과는 'badge_name', 'badge_description' 키를 가진 JSON 형식 문자열로만 답변해주세요."),
+        ("system", f"당신은 창의적이고 유머러스한 동기부여 전문가입니다. 사용자의 운동 기록과 목표를 바탕으로, 유머러스하면서도 운동 기록의 특징을 반영한 '뱃지 이름'과 '뱃지 설명'을 생성해주세요. "
+                   "설명은 1~2 문장으로 작성하고, 결과는 'badge_name', 'badge_description' 키를 가진 JSON 형식 문자열로만 답변해주세요."),
         ("human", "달성한 월간 목표: {monthly_goal}\n\n생성된 뱃지 정보(JSON)를 알려주세요.")
     ])
    
     chain = prompt | llm
-    result = chain.invoke({"monthly_goal": monthly_goal})
+    result = chain.invoke({"monthly_goal": monthly_goal_description})
    
     try:
-        # Extract JSON content using clean_json_string function
         cleaned_content = clean_json_string(result.content)
         badge_info = json.loads(cleaned_content)
         print(f"✨ 생성된 뱃지: {badge_info}")
         return {"generated_badge": badge_info}
     except json.JSONDecodeError:
-        print("🚨 뱃지 생성 실패")
+        print("🚨 뱃지 정보 JSON 파싱 실패")
         return {"generated_badge": {"badge_name": "목표 달성!", "badge_description": "월간 목표를 성공적으로 완수하셨습니다."}}
