@@ -11,11 +11,16 @@ class ExerciseState(TypedDict):
     user_email: Optional[str]
     exercise_history: List[Dict[str, Any]]
 
-    # --- 중간 처리 결과 ---
+    # --- 사용자 선택 및 AI 분석 데이터 ---
+    coach_persona: str
+    fatigue_analysis: Dict[str, Any]
+    slump_prediction: Dict[str, Any]
+    comparison_stats: Dict[str, Any]
     analysis_result: str
     suggested_goals: str
     feedback: Dict[str, str]
 
     # --- 최종 결과 ---
     final_goals: str
+    generated_badge: Dict[str, str]
     is_goal_achieved: bool
