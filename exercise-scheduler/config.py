@@ -1,8 +1,3 @@
-# config.py
-"""
-프로젝트의 모든 설정 값을 중앙에서 관리하는 파일입니다.
-API 엔드포인트, 모델 이름, 기본값 등을 정의합니다.
-"""
 import os
 from dotenv import load_dotenv
 
@@ -14,9 +9,3 @@ load_dotenv(dotenv_path=dotenv_path)
 # --- API & Model Settings ---
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 LLM_MODEL_NAME = "gpt-4o-mini"
-BACKEND_API_URL = "http://localhost:8081"
-API_TIMEOUT = 5
-
-# --- Test/Default Values ---
-DEFAULT_USER_ID = ""
-DEFAULT_JWT_TOKEN = ""
