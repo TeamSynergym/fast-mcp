@@ -362,10 +362,10 @@ def supervisor_node(state: SupervisorGraphState) -> Dict[str, str]:
         if user_choice == "1":
             return {"next_agent": "ai_coach_interaction"}
         elif user_choice == "2":
-            return {"next_agent": "youtube_recommendation"}
+            return {"next_agent": "video_search"}
         else:
             print("잘못된 입력입니다. 기본적으로 유튜브 영상 추천으로 진행합니다.")
-            return {"next_agent": "youtube_recommendation"}
+            return {"next_agent": "video_search"}
     elif "AI 코치 대화 완료" in last_message:
         return {"next_agent": "present_final_result"}
     elif "유튜브 영상 추천 완료" in last_message:
@@ -458,8 +458,8 @@ app = workflow.compile()
 if __name__ == "__main__":
     initial_state = {
         "messages": [HumanMessage(content="자세 분석을 시작합니다.")],
-        "image_path": "app/services/images/test_side.jpg",
-        "analysis_mode": "side",
+        "image_path": "app/services/images/test_front.jpg",
+        "analysis_mode": "front",
         "search_retries": 0,
         "comment_count": 0,
         "user_response": None,

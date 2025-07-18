@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from langchain_openai import ChatOpenAI
 from fastapi import FastAPI
 import cloudinary.uploader
+import requests
 
 # --- 서비스 및 노드 클래스 Import ---
 from app.services.posture_analyzer import PostureAnalyzer
@@ -117,8 +118,7 @@ def recommend_exercise_node(state: SupervisorGraphState) -> Dict[str, Any]:
         diagnosis_text = state["diagnosis"]["korean"]
         
         # LLM을 사용해 진단 내용에서 핵심 키워드를 추출하여 검색 쿼리 생성
-        prompt = f"""아래의 자세 진단 내용에 가장 적합한 '단 한 가지'의 검색어을 추천해줘. 
-        자세 점수 중에서 0으로 나오는 것은 제외하고 가장 낮은 점수의 부위를 집중해서 검색어를 추천해줘.
+        prompt = f"""아래의 자세 진단 내용에 가장 적합한 '단 한 가지'의 검색어을 추천해줘.
         ~난이도, ~효과를 가진, ~부위의, ~운동의 순서로 검색어를 작성해야해.
         VectorDB 검색에 사용할 키워드 문장 오직 한개만 간결하게 한 줄로 답해줘.
         
@@ -147,6 +147,32 @@ def recommend_exercise_node(state: SupervisorGraphState) -> Dict[str, Any]:
         
     except Exception as e:
         return {"error": f"운동 추천 노드 오류: {e}"}
+
+def ai_coach_interaction_node(state: SupervisorGraphState) -> Dict[str, Any]:
+    """AI 코치와의 대화 노드"""
+    print("[Node - AI 코치] 사용자와 대화 중...")
+    try:
+        diagnosis_text = state["diagnosis"]["korean"]
+        recommended_exercise = state["recommended_exercise"]["name"]
+        
+        prompt = f"""
+        당신은 AI 피트니스 코치입니다. 아래 정보를 바탕으로 사용자와 대화를 시작하세요.
+        
+        [진단 내용]
+        {diagnosis_text}
+        
+        [추천 운동]
+        {recommended_exercise}
+        
+        사용자에게 운동의 중요성과 자세 교정의 필요성을 설명하고, 동기부여를 제공하세요.
+        """
+        response = llm.invoke(prompt).content.strip()
+        print(f"  > AI 코치 응답: {response}")
+        
+        message = HumanMessage(content=f"AI 코치 대화 완료: {response}")
+        return {"messages": [message]}
+    except Exception as e:
+        return {"error": f"AI 코치 노드 오류: {e}"}
 
 def video_search_node(state: SupervisorGraphState) -> Dict[str, Any]:
     print(f"[Node 3 - 시도 {state['search_retries'] + 1}] 보충 영상 검색 중 (Youtube)...")
@@ -370,7 +396,18 @@ def supervisor_node(state: SupervisorGraphState) -> Dict[str, str]:
     elif "레이더 차트 생성 완료" in last_message:
         return {"next_agent": "recommend_exercise"}
     elif "DB 기반 운동 추천 완료" in last_message:
-        return {"next_agent": "video_search"}
+        user_choice = input("운동 추천 후 다음 단계 선택 (1: AI 코치와 대화, 2: 유튜브 영상 추천): ").strip()
+        if user_choice == "1":
+            return {"next_agent": "ai_coach_interaction"}
+        elif user_choice == "2":
+            return {"next_agent": "video_search"}
+        else:
+            print("잘못된 입력입니다. 기본적으로 유튜브 영상 추천으로 진행합니다.")
+            return {"next_agent": "video_search"}
+    elif "AI 코치 대화 완료" in last_message:
+        return {"next_agent": "present_final_result"}
+    elif "유튜브 영상 추천 완료" in last_message:
+        return {"next_agent": "summarize_video"}
     elif "유튜브 영상 검색 완료" in last_message:
         return {"next_agent": "summarize_video"}
     elif "영상 요약 완료" in last_message:
@@ -424,6 +461,7 @@ workflow.add_node("ask_user_response", ask_user_response_node)
 workflow.add_node("rerun_youtube_agent", rerun_youtube_agent_node)
 workflow.add_node("comment_summary_unavailable", comment_summary_unavailable_node)
 workflow.add_node("supervisor", supervisor_node)
+workflow.add_node("ai_coach_interaction", ai_coach_interaction_node)
 
 workflow.set_entry_point("analyze_user_pose")
 workflow.add_edge("analyze_user_pose", "supervisor")
@@ -435,6 +473,7 @@ workflow.add_edge("validate_summary", "supervisor")
 workflow.add_edge("ask_user_response", "supervisor")
 workflow.add_edge("rerun_youtube_agent", "supervisor")
 workflow.add_edge("comment_summary_unavailable", "supervisor")
+workflow.add_edge("ai_coach_interaction", "supervisor")
 
 workflow.add_conditional_edges(
     "supervisor",
@@ -509,7 +548,7 @@ async def analyze_graph_endpoint(request: AnalysisRequest):
     feedback = pose_data.get("feedback", {})
     measurements = pose_data.get("measurements", {})
     return {
-        "diagnosis": result.get("diagnosis", {}).get("korean"),
+        "diagnosis": result.get("diagnosis", {}),  # 전체 diagnosis 객체 반환 (korean 키 포함)
         "radar_chart_url": radar_chart_url,
         "spineCurvScore": scores.get("척추굽음score"),
         "spineScolScore": scores.get("척추휨score"),
@@ -520,7 +559,107 @@ async def analyze_graph_endpoint(request: AnalysisRequest):
         "measurements": measurements
     }
 
-# --- (선택) 맞춤운동추천/유튜브 등 후속 워크플로우는 별도 엔드포인트로 구현 가능 ---
-# @app.post("/recommend-exercise")
-# async def recommend_exercise_endpoint(...):
-#     ...
+class ChatbotRequest(BaseModel):
+    type: str  # "ai_coach" or "recommend_video"
+    user_id: int
+    history_id: int
+    message: Optional[str] = None
+
+class ChatbotResponse(BaseModel):
+    type: str
+    response: str
+    video_url: Optional[str] = None
+    video_title: Optional[str] = None
+
+def get_analysis_history_from_spring(history_id: int):
+    SPRING_API_URL = "http://localhost:8081/api/analysis-histories"
+    try:
+        resp = requests.get(f"{SPRING_API_URL}/{history_id}")
+        if resp.status_code == 200:
+            return resp.json()
+        else:
+            return None
+    except Exception as e:
+        print(f"Spring API 호출 오류: {e}")
+        return None
+
+@app.post("/chatbot", response_model=ChatbotResponse)
+async def chatbot_endpoint(req: ChatbotRequest):
+    # 1. 분석 결과 Spring에서 조회
+    history = get_analysis_history_from_spring(req.history_id)
+    if not history:
+        raise HTTPException(status_code=404, detail="분석 이력을 찾을 수 없습니다.")
+
+    # 2. diagnosis 등 state 구성
+    diagnosis = {}
+    if history.get("diagnosis"):
+        try:
+            diagnosis = json.loads(history["diagnosis"])
+        except Exception:
+            diagnosis = {"korean": history["diagnosis"]}
+
+    # 3. 추천 운동을 recommend_exercise_node로부터 받아옴
+    rec_state = {
+        "diagnosis": diagnosis,
+        "search_retries": 0,
+        "tried_video_urls": []
+    }
+    rec_result = recommend_exercise_node(rec_state)
+    recommended_exercise = rec_result.get("recommended_exercise", {"name": "목 스트레칭"})
+
+    # 4. 기존 노드 활용
+    if req.type == "ai_coach":
+        state = {
+            "diagnosis": diagnosis,
+            "recommended_exercise": recommended_exercise
+        }
+        result = ai_coach_interaction_node(state)
+        response_text = result["messages"][-1].content if "messages" in result and result["messages"] else "AI 코치 응답이 없습니다."
+        return ChatbotResponse(type="ai_coach", response=response_text)
+
+    elif req.type == "recommend_video":
+        state = {
+            "recommended_exercise": recommended_exercise,
+            "search_retries": 0,
+            "tried_video_urls": []
+        }
+        # 1. 영상 추천
+        result = video_search_node(state)
+        chatbot_result = result.get("chatbot_result", {})
+        video_url = chatbot_result.get("youtube_url")
+        video_title = chatbot_result.get("video_title")
+        if not video_url or "No video found" in str(video_url):
+            return ChatbotResponse(
+                type="recommend_video",
+                response="추천 영상을 찾지 못했습니다. 다시 시도해 주세요.",
+                video_url=None,
+                video_title=None
+            )
+        # 2. 영상 요약
+        state.update({"chatbot_result": chatbot_result})
+        result = summarize_video_node(state)
+        summary = result.get("youtube_summary")
+        comment_count = result.get("comment_count", 0)
+        # 3. 요약 검증
+        state.update({"youtube_summary": summary, "comment_count": comment_count})
+        result = validate_summary_node(state)
+        # 4. 댓글 수에 따라 분기
+        if comment_count >= 10:
+            # 실제 서비스에서는 프론트에서 추가 요청을 받아야 하므로, 여기서는 안내 메시지 반환
+            return ChatbotResponse(
+                type="recommend_video",
+                response="영상 요약이 완료되었습니다. 댓글 요약을 원하시면 추가로 요청해 주세요.",
+                video_url=video_url,
+                video_title=video_title
+            )
+        else:
+            # 댓글 요약 불가 안내
+            result = comment_summary_unavailable_node(state)
+            return ChatbotResponse(
+                type="recommend_video",
+                response="영상 요약이 완료되었으나, 댓글 수가 적어 댓글 요약을 제공하지 않습니다.",
+                video_url=video_url,
+                video_title=video_title
+            )
+    else:
+        return ChatbotResponse(type="error", response="지원하지 않는 type입니다.")
