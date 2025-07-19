@@ -1,4 +1,3 @@
-# app/graph/state.py
 from typing import TypedDict, List, Dict, Any, Optional
 
 class ExerciseState(TypedDict):
@@ -7,7 +6,6 @@ class ExerciseState(TypedDict):
     """
     # --- 입력 및 DB 데이터 ---
     user_id: str
-    jwt_token: str
     user_email: Optional[str]
     exercise_history: List[Dict[str, Any]]
 
