@@ -1,13 +1,11 @@
-# app/graph/edges.py
 import pandas as pd
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 
 from .state import ExerciseState
-from config import LLM_MODEL_NAME
 
 # LLM 모델 초기화
-llm = ChatOpenAI(model=LLM_MODEL_NAME, temperature=0)
+llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 
 def check_goal_completion_edge(state: ExerciseState) -> str:
     """
