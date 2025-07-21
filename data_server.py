@@ -121,58 +121,6 @@ def model(csv_path: str, x_columns: list, y_column: str) -> dict:
   return {"model_type": model_type, "metric": metric_name, "score": score}
 
 
-@mcp.tool()
-def plot_radar_chart(values: dict, output_path: str = "radar_chart.png") -> str:
-    """
-    오각형(레이더 차트) 그래프를 생성하고 이미지를 저장합니다.
-    - 차트의 범위는 0부터 100까지이며, 20단위로 눈금을 표시합니다.
-    - 차트를 회전시켜 첫 항목이 상단을 향하도록 조정합니다.
-
-    Args:
-        values (dict): {"목": float, "어깨": float, "골반": float, "척추(정면)": float, "척추(측면)": float}
-        output_path (str): 저장할 이미지 파일 경로
-
-    Returns:
-        str: 저장된 이미지 파일 경로
-    """
-
-    matplotlib.rc('font', family='Malgun Gothic')
-    plt.rcParams['axes.unicode_minus'] = False
-
-    labels = ["목", "어깨", "골반", "척추(정면)", "척추(측면)"]
-    stats = [values.get(label, 0) for label in labels]
-
-    #회전 각도 설정 (단위: 도). 90으로 설정하면 첫 항목('목')이 위쪽(12시 방향)
-    rotation_angle_deg = 20
-    #도(degree)를 라디안(radian)으로 변환합니다.
-    rotation_offset = np.deg2rad(rotation_angle_deg)
-    # np.linspace를 사용하여 5개의 꼭짓점을 360도에 고르게 분포
-    angles = np.linspace(0, 2 * np.pi, len(labels), endpoint=False) + rotation_offset
-    angles = angles.tolist()
-    # 그래프를 닫기 위해 시작점 데이터를 끝에 추가
-    stats += stats[:1]
-    angles += angles[:1]
-
-    fig, ax = plt.subplots(figsize=(6, 6), subplot_kw=dict(polar=True))
-    ax.plot(angles, stats, linewidth=2, linestyle='solid')
-    ax.fill(angles, stats, alpha=0.25)
-    # Y축(반지름)의 최소/최대값 설정 (0부터 100까지)
-    ax.set_ylim(0, 100)
-    # Y축 눈금 설정 (20 단위로)
-    ax.set_yticks(np.arange(0, 101, 20))
-    #숫자 눈금(0~100)이 표시될 각도를 설정
-    ax.set_rlabel_position(126)
-    
-    # X축(각도)의 눈금 및 라벨 설정
-    ax.set_xticks(angles[:-1])
-    ax.set_xticklabels(labels)
-
-    plt.title("부위별 균형 변화")
-    plt.savefig(output_path)
-    plt.close()
-    return output_path
-
-
 @mcp.prompt()
 def default_prompt(message: str) -> list[base.Message]:
   return [
@@ -186,12 +134,3 @@ def default_prompt(message: str) -> list[base.Message]:
 
 if __name__ == "__main__":
   mcp.run(transport="stdio")
-  # 테스트용 예시 데이터
-  # test_values = {
-  #       "목": 80,
-  #       "어깨": 65,
-  #       "골반": 75,
-  #       "척추(정면)": 90,
-  #       "척추(측면)": 50}
-  # output = plot_radar_chart(test_values, "test_radar_chart.png")
-  # print(f"Radar chart saved to: {output}")

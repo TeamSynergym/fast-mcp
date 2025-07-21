@@ -442,7 +442,24 @@ class PostureAnalyzer:
         """
         scores = analysis_data.get('scores', {})
         feedback = analysis_data.get('feedback', {})
-        
+
+        # 가장 낮은 점수 부위 계산
+        min_part = None
+        min_score = 101
+        priority = [
+            ('골반틀어짐score', 'Pelvis'),
+            ('어깨score', 'Shoulders'),
+            ('척추휨score', 'Spine (front)'),
+            ('척추굽음score', 'Spine (side)'),
+            ('거북목score', 'Neck')
+        ]
+        for key, _ in priority:
+            val = scores.get(key)
+            if val is not None and val < min_score:
+                min_score = val
+                min_part = key
+        min_part_eng = next((eng for k, eng in priority if k == min_part), min_part)
+
         # 프롬프트를 영어로 작성하여 더 정확한 영문 답변 유도
         prompt_parts = []
         prompt_parts.append(
@@ -452,12 +469,13 @@ class PostureAnalyzer:
             "2. State this primary issue in simple, non-medical terms (e.g., 'forward head,' 'rounded shoulders')."
             "3. Add a short, motivating sentence to encourage the user."
             "IMPORTANT: Your entire response must be under 450 characters. Be supportive and concise."
+            "\n\n[IMPORTANT RULE] The area with the lowest score MUST be selected as the primary area for improvement."
         )
         prompt_parts.append("Please provide specific advice on areas that need improvement. Maintain a positive and encouraging tone.")
         prompt_parts.append(f"\n## Analysis Mode: {mode.capitalize()} View")
         prompt_parts.append(f"\n### Posture Scores: {scores}")
         prompt_parts.append(f"\n### Feedback: {feedback}")
-        
+
         full_prompt = "\n".join(prompt_parts)
 
         # Initialize variables to handle exceptions
