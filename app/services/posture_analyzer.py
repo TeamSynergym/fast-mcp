@@ -6,6 +6,11 @@ import os
 import ollama
 import requests  # Ensure requests is imported
 import json  # JSON 모듈 추가
+from dotenv import load_dotenv
+import openai
+
+load_dotenv()
+client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 class PostureAnalyzer:
     def __init__(self, model_path: str = "models/yolopose_v1.pt"
@@ -436,9 +441,34 @@ class PostureAnalyzer:
             print(f"번역 처리 중 예기치 않은 오류 발생: {e}")
             return f"[번역 실패] 원문: {text}"
 
+    def polish_korean_text(self, text: str) -> str:
+        """
+        OpenAI GPT를 이용해 번역된 한글 문장을 더 자연스럽게 다듬는다.
+        """
+        prompt = (
+            "아래 문장을 더 자연스럽고 매끄러운 한국어로 다듬어줘. "
+            "문법적으로 어색한 부분을 고치고, 너무 번역투인 표현은 자연스럽게 바꿔줘.\n\n"
+            f"[원문]\n{text}\n\n[다듬은 문장]"
+        )
+        try:
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": "너는 매우 자연스러운 한국어 문장 교정 전문가야."},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=256,
+                temperature=0.7,
+            )
+            polished = response.choices[0].message.content.strip()
+            return polished
+        except Exception as e:
+            print(f"GPT 후처리 중 오류: {e}")
+            return text
+
     def generate_ollama_diagnosis(self, analysis_data: Dict, mode: str) -> Dict:
         """
-        Ollama로부터 영문 진단을 받고, 이를 한국어로 번역하는 방식.
+        Ollama로부터 영문 진단을 받고, 이를 한국어로 번역한 뒤, LLM으로 한 번 더 자연스럽게 다듬는다.
         """
         scores = analysis_data.get('scores', {})
         feedback = analysis_data.get('feedback', {})
@@ -475,6 +505,7 @@ class PostureAnalyzer:
         prompt_parts.append(f"\n## Analysis Mode: {mode.capitalize()} View")
         prompt_parts.append(f"\n### Posture Scores: {scores}")
         prompt_parts.append(f"\n### Feedback: {feedback}")
+        prompt_parts.append(f"\n### Most Important Area: {min_part_eng}")
 
         full_prompt = "\n".join(prompt_parts)
 
@@ -490,10 +521,8 @@ class PostureAnalyzer:
                 "model": self.ollama_model,
                 "messages": [{"role": "user", "content": full_prompt}]
             }
-            
             response = requests.post(url, json=payload, headers=headers, stream=True)
             response.raise_for_status()  # Raise exception for HTTP errors
-            
             # Collect streamed JSON objects
             messages = []
             for line in response.iter_lines():
@@ -504,10 +533,10 @@ class PostureAnalyzer:
                         messages.append(content)
                     except json.JSONDecodeError:
                         print(f"Skipping invalid JSON line: {line}")
-    
             # Combine all messages into a single diagnosis
             english_diagnosis = " ".join(messages).strip()
             korean_diagnosis = self._translate_to_korean(english_diagnosis)
+            korean_diagnosis = self.polish_korean_text(korean_diagnosis)
         except Exception as e:
             print(f"❌ Error: {e}")
             korean_diagnosis += f" 오류: {e}"
