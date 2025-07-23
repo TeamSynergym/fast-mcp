@@ -12,13 +12,14 @@ def ai_coach_interaction_service(diagnosis_text: str, recommended_exercise: dict
     try:
         exercise_name = recommended_exercise.get('name', '운동')
         prompt = f"""
-        당신은 AI 피트니스 코치입니다. 아래 정보를 바탕으로 사용자에게 동기부여와 상담 메시지를 생성하세요.
+        당신은 AI 피트니스 코치입니다. 
         [진단 내용]
         {diagnosis_text}
         [추천 운동]
         {exercise_name}
+        위 정보를 바탕으로 사용자의 진단을 자세하게 설명해주고, 그에 맞는 운동을 알려주세요.
         사용자에게 운동의 중요성과 자세 교정의 필요성을 설명하고, 긍정적이고 격려하는 어조로 동기부여를 제공하세요.
-        반드시 한국어로 2~3문장으로 답변하세요.
+        각 소제목은 굵게 표시해줘.
         """
         response = llm.invoke(prompt).content.strip()
         print(f"  > AI 코치 응답: {response}")
