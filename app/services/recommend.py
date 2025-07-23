@@ -1,4 +1,4 @@
-def recommend_exercise_node(diagnosis_text: str, vector_db, llm) -> dict:
+def recommend_node(diagnosis_text: str, vector_db, llm) -> dict:
     """
     진단 내용을 바탕으로 LLM을 통해 운동 추천 검색어를 생성하고, VectorDB에서 추천 운동을 반환합니다.
     Args:
