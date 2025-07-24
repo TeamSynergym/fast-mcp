@@ -10,6 +10,7 @@ from app.ai_coach_router import router as ai_coach_router
 from app.youtube_router import router as youtube_router
 from app.goal_setting_router import router as goal_setting_router
 from app.recommendation_router import router as recommendation_router
+from app.emotion_router import router as emotion_router
 
 
 
@@ -23,6 +24,7 @@ app.include_router(ai_coach_router)
 app.include_router(youtube_router)
 app.include_router(goal_setting_router)
 app.include_router(recommendation_router)
+app.include_router(emotion_router)
 
 @app.get("/", summary="Health Check")
 def health_check():
