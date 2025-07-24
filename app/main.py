@@ -3,6 +3,7 @@ import numpy as np
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from app.services.posture_analyzer import PostureAnalyzer
+from app.emotion_router import router as emotion_router
 
 # --- [수정된 함수] ---
 # NumPy 2.0+ 버전에 호환되도록 수정한 헬퍼 함수
@@ -26,6 +27,7 @@ def convert_numpy_to_python(data):
 # 1. FastAPI 앱과 PostureAnalyzer를 초기화합니다.
 app = FastAPI()
 analyzer = PostureAnalyzer(model_path="models/yolopose_v1.pt")
+app.include_router(emotion_router)
 
 # 2. curl로 받을 요청의 형식을 정의합니다.
 class AnalysisRequest(BaseModel):
