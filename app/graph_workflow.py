@@ -226,7 +226,8 @@ def ai_coach_node(state):
     return {
         "type": "ai_coach",
         "response": ai_coach_message,
-        "history": history
+        "history": history,
+        "recommended_exercise": recommended_exercise
     }
 
 ai_coach_graph = StateGraph(dict)
