@@ -1,11 +1,23 @@
 import matplotlib
-matplotlib.rc('font', family='Malgun Gothic')
 import matplotlib.pyplot as plt
 import numpy as np
 import cloudinary
 import cloudinary.uploader
 import uuid
 import os
+import platform
+import matplotlib.font_manager as fm
+
+fonts = [f.name for f in fm.fontManager.ttflist if 'Gothic' in f.name or 'Batang' in f.name or 'Hangul' in f.name or 'Nanum' in f.name]
+print(sorted(set(fonts)))
+
+
+if platform.system() == 'Darwin':
+    matplotlib.rc('font', family='AppleGothic')
+else:
+    matplotlib.rc('font', family='Malgun')
+
+
 
 # 1. 점수 dict에서 radar chart용 점수 dict(3각/5각)를 추출하는 함수
 # - 정면+측면(5개): 목, 어깨, 골반, 척추(정면), 척추(측면)
