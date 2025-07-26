@@ -18,7 +18,7 @@ class ChatbotActionNode:
     유튜브 검색 로직을 수행하는 클래스.
     재검색 시 이전에 찾았던 영상을 제외하는 기능 추가
     """
-    def _search_youtube(self, query: str, exclude_urls: Optional[List[str]] = None) -> str:
+    def _search_youtube(self, query: str, exclude_urls: Optional[List[str]] = None) -> dict:
         """
         유튜브에서 자막이 있는 영상을 검색합니다.
         exclude_urls에 포함된 영상은 검색 결과에서 제외됩니다.
@@ -42,7 +42,7 @@ class ChatbotActionNode:
             items = response.json().get("items", [])
             
             if not items:
-                return "No video found."
+                return {"youtube_url": "No video found.", "video_title": None}
             
             for item in items:
                 video_id = item["id"]["videoId"]
@@ -52,7 +52,7 @@ class ChatbotActionNode:
                 # 제외 목록과 비교
                 youtube_url = f"https://www.youtube.com/watch?v={video_id}"
                 if youtube_url in exclude_urls:
-                    print(f"  > 이미 확인한 영상입니다 (ID: {video_id}). 건너뜁니다.")
+                    print(f"  > 이미 확인한 영상입니다 (ID: {video_id}). 건너뜁니다.")
                     continue
                 
                 try:
@@ -60,31 +60,35 @@ class ChatbotActionNode:
                     transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
                     transcript_list.find_transcript(['ko', 'en'])
                     
-                    # 자막이 있으면 해당 영상 URL을 반환하고 루프 종료
-                    print(f"  > 자막이 있는 새 영상 찾음: {video_id}")
-                    return youtube_url
+                    # 자막이 있으면 해당 영상 URL과 제목을 반환하고 루프 종료
+                    video_title = item["snippet"].get("title", None)
+                    print(f"  > 자막이 있는 새 영상 찾음: {video_id} (title: {video_title})")
+                    return {"youtube_url": youtube_url, "video_title": video_title}
                 
                 except (TranscriptsDisabled, NoTranscriptFound):
                     # 자막이 없으면 다음 영상으로 넘어감
-                    print(f"  > 자막 없음 (ID: {video_id}). 다음 영상 확인...")
+                    print(f"  > 자막 없음 (ID: {video_id}). 다음 영상 확인...")
                     continue
             
             # 모든 영상을 확인했지만 적합한 영상이 없는 경우
-            return "No suitable video found after checking all results."
+            return {"youtube_url": "No suitable video found after checking all results.", "video_title": None}
 
         except requests.exceptions.RequestException as e:
             print(f"Error during YouTube API call: {e}")
-            return "Error fetching video."
+            return {"youtube_url": "Error fetching video.", "video_title": None}
 
 
-    async def run(self, prompt: str, exclude_urls: Optional[List[str]] = None) -> dict:
+    def run(self, prompt: str, exclude_urls: Optional[List[str]] = None) -> dict:
         """클래스의 모든 로직을 실행하는 메인 메소드"""
         search_phrase = prompt.strip()
         
-        print(f"  > 유튜브 검색 실행: '{search_phrase}'")
-        youtube_url = self._search_youtube(search_phrase, exclude_urls=exclude_urls)
+        print(f"  > 유튜브 검색 실행: '{search_phrase}'")
+        result = self._search_youtube(search_phrase, exclude_urls=exclude_urls)
+        youtube_url = result.get("youtube_url")
+        video_title = result.get("video_title")
 
         return {
             "youtube_url": youtube_url,
+            "video_title": video_title,
             "search_phrase": search_phrase,
         }
