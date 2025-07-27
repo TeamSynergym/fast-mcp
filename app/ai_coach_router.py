@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import redis
 import os
 from dotenv import load_dotenv
@@ -13,10 +13,13 @@ redis_client = redis.Redis(host=os.getenv("REDIS_HOST", "192.168.2.6"), port=637
 router = APIRouter()
 
 class AiCoachRequest(BaseModel):
-    user_id: int
+    user_id: int = Field(..., alias='userId')
     diagnosis: dict
     recommended_exercise: dict
     message: str = None
+
+    class Config:
+        allow_population_by_field_name = True
 
 class AiCoachResponse(BaseModel):
     type: str

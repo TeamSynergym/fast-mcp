@@ -6,9 +6,12 @@ from app.services.exercise_vector_db import ExerciseVectorDB
 from langgraph.graph import StateGraph
 from langchain_openai import ChatOpenAI
 from app.services.ai_coach_service import ai_coach_interaction_service
+from app.nodes.chatbot_node import ChatbotActionNode
+from app.agents.youtube_agent import graph as youtube_summary_agent
 import redis
 import json
 import os
+import asyncio
 
 posture_analyzer = PostureAnalyzer(model_path="models/yolopose_v1.pt")
 vector_db = ExerciseVectorDB()
@@ -234,3 +237,343 @@ ai_coach_graph = StateGraph(dict)
 ai_coach_graph.add_node("ai_coach", ai_coach_node)
 ai_coach_graph.set_entry_point("ai_coach")
 app_ai_coach_graph = ai_coach_graph.compile()
+
+
+
+# 비디오 검색 노드
+def video_search_node(state):
+    print("[video_search_node] 비디오 검색 시작")
+    recommended_exercise = state.get("recommended_exercise", {})
+    exercise_name = recommended_exercise.get("name", "")
+    
+    if not exercise_name:
+        return {"error": "추천 운동 이름이 없습니다."}
+    
+    try:
+        # search_retries 값에 따라 분기 로직
+        search_retries = state.get("search_retries", 0)
+        if search_retries > 0:
+            print("   > 영상 검증 실패로 재검색을 실행합니다. 이전 영상은 제외됩니다.")
+            tried_urls = state.get("tried_video_urls", [])
+        else:
+            print("   > 초기 영상 검색을 실행합니다.")
+            tried_urls = []
+            
+        # 검색어 생성
+        if "자세" in exercise_name or "스트레칭" in exercise_name:
+            search_query = f"{exercise_name}"
+        else:
+            search_query = f"{exercise_name} 운동"
+            
+        print(f"  > 유튜브 검색어: '{search_query}'")
+        
+        # 챗봇 노드를 통해 영상 검색
+        chatbot_node = ChatbotActionNode()
+        result = chatbot_node.run(prompt=search_query, exclude_urls=tried_urls)
+        new_url = result.get("youtube_url")
+        video_title = result.get("video_title")
+        
+        if not new_url or "No video found" in new_url:
+            raise ValueError("추천 유튜브 영상을 찾지 못했습니다.")
+
+        print(f"  > 검색 완료. URL: {new_url}, 제목: {video_title}")
+        
+        # 새로운 URL을 tried_urls에 추가
+        updated_tried_urls = tried_urls + [new_url] if new_url else tried_urls
+        
+        return {
+            "chatbot_result": result,
+            "search_retries": search_retries + 1,
+            "tried_video_urls": updated_tried_urls,
+            "diagnosis": state.get("diagnosis"),
+            "recommended_exercise": recommended_exercise,
+            "pose_data": state.get("pose_data"),
+            "radar_chart_url": state.get("radar_chart_url")
+        }
+        
+    except Exception as e:
+        print(f"  > 검색 실패: {e}")
+        return {"error": f"비디오 검색 실패: {e}"}
+
+# 영상 요약 노드
+def summarize_video_node(state):
+    print("[summarize_video_node] 유튜브 영상 요약 시작")
+    try:
+        youtube_url = state.get("chatbot_result", {}).get("youtube_url")
+        if not youtube_url:
+            return {"error": "YouTube URL이 없습니다."}
+            
+        summary_result = youtube_summary_agent.invoke({"url": youtube_url})
+        if summary_result.get("error"):
+            raise ValueError(f"유튜브 요약 실패: {summary_result['error']}")
+        
+        summary = summary_result.get("script_summary")
+        if not isinstance(summary, dict):
+            summary = {"summary": summary}
+        comment_count = summary_result.get("comment_count", 0)
+        
+        print(f"  > 요약 완료. 댓글 수: {comment_count}")
+        
+        return {
+            "youtube_summary": summary,
+            "comment_count": comment_count,
+            "chatbot_result": state.get("chatbot_result"),
+            "diagnosis": state.get("diagnosis"),
+            "recommended_exercise": state.get("recommended_exercise"),
+            "pose_data": state.get("pose_data"),
+            "radar_chart_url": state.get("radar_chart_url")
+        }
+        
+    except Exception as e:
+        return {"error": f"영상 요약 실패: {e}"}
+
+# 요약 검증 노드
+def validate_summary_node(state):
+    print("[validate_summary_node] 영상 요약 검증 시작")
+    try:
+        summary_dict = state.get("youtube_summary", {})
+        summary_text = json.dumps(summary_dict)
+        diagnosis_text = state.get("diagnosis", {}).get("korean", "")
+        recommended_exercise = state.get("recommended_exercise", {}).get("name", "")
+
+        # 요약이 너무 짧거나 없는 경우, 바로 부적합 판정
+        if not summary_dict or len(summary_text) < 50:
+            print("  > 검증 실패: 요약 내용이 너무 짧거나 없습니다.")
+            comment_count = state.get("comment_count", 0)
+            if comment_count >= 10:
+                return {
+                    "error": "요약 내용이 부실합니다.",
+                    "youtube_summary": state.get("youtube_summary"),
+                    "comment_count": comment_count,
+                    "chatbot_result": state.get("chatbot_result"),
+                    "diagnosis": state.get("diagnosis"),
+                    "recommended_exercise": state.get("recommended_exercise"),
+                    "pose_data": state.get("pose_data"),
+                    "radar_chart_url": state.get("radar_chart_url"),
+                    "next_step": "comment_summary"
+                }
+            else:
+                return {
+                    "error": "요약 내용이 부실합니다.",
+                    "youtube_summary": state.get("youtube_summary"),
+                    "comment_count": comment_count,
+                    "chatbot_result": state.get("chatbot_result"),
+                    "diagnosis": state.get("diagnosis"),
+                    "recommended_exercise": state.get("recommended_exercise"),
+                    "pose_data": state.get("pose_data"),
+                    "radar_chart_url": state.get("radar_chart_url"),
+                    "next_step": "comment_summary_unavailable"
+                }
+
+        # LLM을 통한 관련성 검증
+        prompt = f"""
+당신은 사용자의 자세 교정을 위한 운동 영상을 필터링하는 AI 전문가입니다.
+
+[분석할 정보]
+- 자세 진단: '{diagnosis_text}'
+- 추천 운동: '{recommended_exercise}'
+- 추천 운동의 효과: '{state.get("recommended_exercise", {}).get("description", "효과 정보 없음")}'
+- 영상 요약: '{summary_text}'
+
+[수행할 작업]
+- '자세 진단'을 개선하고 '추천 운동'을 수행하는 데 '영상 요약'의 내용이 적합한지 판단해주세요.
+- 가장 먼저 제외조건에 해당하는 내용이 있는지 살펴보고, 해당할 시 반드시 관련없음으로 판단해야 합니다.
+- 또한 동영상의 내용과 '추천 운동의 효과'가 서로 관련있는지도 판단해야 합니다.
+
+[제외 조건]
+- **스포츠 전문 훈련:** 특정 스포츠(예: 축구, 야구, 골프, 수영)의 기술 향상을 위한 훈련은 '관련 없음'으로 처리합니다.
+
+관련이 있으면 '적합', 없으면 '부적합'으로만 답해주세요.
+"""
+        
+        validation_result = llm.invoke(prompt).content.strip()
+        
+        if "적합" in validation_result:
+            print("  > 검증 성공: 영상이 적합합니다.")
+            # 댓글 수에 따라 분기 로직 추가
+            comment_count = state.get("comment_count", 0)
+            if comment_count >= 10:
+                print(f"  > 댓글 수({comment_count})가 10개 이상이므로 댓글 요약을 진행합니다.")
+                return {
+                    "validation_result": "success",
+                    "youtube_summary": state.get("youtube_summary"),
+                    "comment_count": state.get("comment_count"),
+                    "chatbot_result": state.get("chatbot_result"),
+                    "diagnosis": state.get("diagnosis"),
+                    "recommended_exercise": state.get("recommended_exercise"),
+                    "pose_data": state.get("pose_data"),
+                    "radar_chart_url": state.get("radar_chart_url"),
+                    "next_step": "comment_summary"
+                }
+            else:
+                print(f"  > 댓글 수({comment_count})가 10개 미만이므로 댓글 요약을 제공하지 않습니다.")
+                return {
+                    "validation_result": "success",
+                    "youtube_summary": state.get("youtube_summary"),
+                    "comment_count": state.get("comment_count"),
+                    "chatbot_result": state.get("chatbot_result"),
+                    "diagnosis": state.get("diagnosis"),
+                    "recommended_exercise": state.get("recommended_exercise"),
+                    "pose_data": state.get("pose_data"),
+                    "radar_chart_url": state.get("radar_chart_url"),
+                    "next_step": "comment_summary_unavailable"
+                }
+        else:
+            print("  > 검증 실패: 영상이 부적합합니다.")
+            return {
+                "error": "영상이 부적합합니다.",
+                "youtube_summary": state.get("youtube_summary"),
+                "comment_count": state.get("comment_count"),
+                "chatbot_result": state.get("chatbot_result"),
+                "diagnosis": state.get("diagnosis"),
+                "recommended_exercise": state.get("recommended_exercise"),
+                "pose_data": state.get("pose_data"),
+                "radar_chart_url": state.get("radar_chart_url"),
+                "next_step": "comment_summary_unavailable"
+            }
+            
+    except Exception as e:
+        return {
+            "error": f"요약 검증 실패: {e}",
+            "youtube_summary": state.get("youtube_summary"),
+            "comment_count": state.get("comment_count"),
+            "chatbot_result": state.get("chatbot_result"),
+            "diagnosis": state.get("diagnosis"),
+            "recommended_exercise": state.get("recommended_exercise"),
+            "pose_data": state.get("pose_data"),
+            "radar_chart_url": state.get("radar_chart_url"),
+            "next_step": "comment_summary_unavailable"
+        }
+
+# 댓글 요약 불가 노드
+def comment_summary_unavailable_node(state):
+    print("[comment_summary_unavailable_node] 댓글 요약 제공 불가 안내")
+    
+    # 최종 결과에 표시될 메시지를 youtube_summary에 추가
+    updated_youtube_summary = state.get("youtube_summary", {})
+    if isinstance(updated_youtube_summary, dict):
+         updated_youtube_summary["comment_summary"] = "댓글 개수가 10개 미만으로 댓글 요약을 제공하지 않습니다."
+    
+    return {
+        "youtube_summary": updated_youtube_summary,
+        "comment_count": state.get("comment_count"),
+        "chatbot_result": state.get("chatbot_result"),
+        "diagnosis": state.get("diagnosis"),
+        "recommended_exercise": state.get("recommended_exercise"),
+        "pose_data": state.get("pose_data"),
+        "radar_chart_url": state.get("radar_chart_url")
+    }
+
+# YouTube Agent 재실행 노드
+def rerun_youtube_agent_node(state):
+    print("[rerun_youtube_agent_node] YouTube Agent 재실행 시작")
+    
+    try:
+        # YouTube agent의 메모리 그래프 사용
+        youtube_state = {
+            "url": state["chatbot_result"]["youtube_url"],
+            "reply": state.get("user_response", ""),
+            "script_summary": state.get("youtube_summary", {})
+        }
+        
+        # continue_with_memory 함수 사용하여 댓글 요약 실행
+        from app.agents.youtube_agent import graph_memory, continue_with_memory
+        
+        result = continue_with_memory(
+            graph_memory, 
+            youtube_state, 
+            {"configurable": {"thread_id": f"thread_{hash(state['chatbot_result']['youtube_url'])}"}}, 
+            {"reply": state.get("user_response", ""), "url": youtube_state["url"]}
+        )
+        
+        # 댓글 요약 결과 추가
+        updated_youtube_summary = state.get("youtube_summary", {})
+        if result.get("comment_summary"):
+            updated_youtube_summary["comment_summary"] = result["comment_summary"]
+        
+        print("  > 댓글 요약 완료")
+        
+        return {
+            "youtube_summary": updated_youtube_summary,
+            "comment_count": state.get("comment_count"),
+            "chatbot_result": state.get("chatbot_result"),
+            "diagnosis": state.get("diagnosis"),
+            "recommended_exercise": state.get("recommended_exercise"),
+            "pose_data": state.get("pose_data"),
+            "radar_chart_url": state.get("radar_chart_url")
+        }
+        
+    except Exception as e:
+        return {"error": f"YouTube 재실행 실패: {e}"}
+
+# 최종 결과 생성 노드
+def present_final_result_node(state):
+    print("최종 결과 생성 중...")
+    if state.get("error"):
+        final_output = {"success": False, "error_message": state["error"]}
+    else:
+        diagnosis = state.get("diagnosis")
+        diagnosis_korean = diagnosis.get("korean") if diagnosis else None
+
+        chatbot_result = state.get("chatbot_result") or {}
+        search_phrase = chatbot_result.get("search_phrase") if chatbot_result else None
+        youtube_url = chatbot_result.get("youtube_url") if chatbot_result else None
+
+        final_output = {
+            "success": True,
+            "analysis": {
+                "diagnosis": diagnosis_korean,
+                "details": state.get("pose_data")
+            },
+            "primary_recommendation": state.get("recommended_exercise"),
+            "supplementary_video": {
+                "search_phrase": search_phrase,
+                "youtube_url": youtube_url,
+                "video_summary": state.get("youtube_summary") or {}
+            },
+        }
+    print("\n--- 최종 결과 (JSON) ---")
+    print(json.dumps(final_output, indent=2, ensure_ascii=False))
+    return {
+        "final_output": final_output,
+        "diagnosis": state.get("diagnosis"),
+        "recommended_exercise": state.get("recommended_exercise"),
+        "chatbot_result": state.get("chatbot_result"),
+        "youtube_summary": state.get("youtube_summary"),
+        "comment_count": state.get("comment_count"),
+        "pose_data": state.get("pose_data"),
+        "radar_chart_url": state.get("radar_chart_url")
+    }
+
+
+# YouTube 전용 그래프
+youtube_graph = StateGraph(dict)
+youtube_graph.add_node("video_search", video_search_node)
+youtube_graph.add_node("summarize_video", summarize_video_node)
+youtube_graph.add_node("validate_summary", validate_summary_node)
+youtube_graph.add_node("comment_summary_unavailable", comment_summary_unavailable_node)
+youtube_graph.add_node("rerun_youtube_agent", rerun_youtube_agent_node)
+youtube_graph.add_node("present_final_result", present_final_result_node)
+youtube_graph.set_entry_point("video_search")
+youtube_graph.add_edge("video_search", "summarize_video")
+youtube_graph.add_edge("summarize_video", "validate_summary")
+
+# 조건부 엣지: 댓글 수에 따라 분기
+def route_after_validation(state):
+    next_step = state.get("next_step", "comment_summary_unavailable")
+    return next_step
+
+youtube_graph.add_conditional_edges(
+    "validate_summary",
+    route_after_validation,
+    {
+        "comment_summary": "rerun_youtube_agent",
+        "comment_summary_unavailable": "comment_summary_unavailable"
+    }
+)
+
+youtube_graph.add_edge("comment_summary_unavailable", "present_final_result")
+youtube_graph.add_edge("rerun_youtube_agent", "present_final_result")
+app_youtube_graph = youtube_graph.compile()
+
+
