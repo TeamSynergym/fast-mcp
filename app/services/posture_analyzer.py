@@ -515,7 +515,7 @@ class PostureAnalyzer:
 
         try:
             # Ollama API 호출
-            url = "http://192.168.2.6:11434/api/chat"  # Update to the correct endpoint
+            url = "http://localhost:11434/api/chat"  # Update to the correct endpoint
             headers = {"Content-Type": "application/json"}
             payload = {
                 "model": self.ollama_model,

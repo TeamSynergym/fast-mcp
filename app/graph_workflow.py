@@ -192,7 +192,7 @@ merge_graph.add_edge("analyze_user_merge_pose", "radar_chart_merge")
 merge_graph.add_edge("radar_chart_merge", "recommend_exercise_merge")
 app_merge_graph = merge_graph.compile()
 
-redis_client = redis.Redis(host=os.getenv("REDIS_HOST", "192.168.2.6"), port=6379, db=0, decode_responses=True)
+redis_client = redis.Redis(host=os.getenv("REDIS_HOST", "13.221.98.13"), port=6379, db=0, decode_responses=True)
 
 def ai_coach_node(state):
     user_id = state.get("user_id")
