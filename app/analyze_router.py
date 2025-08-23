@@ -23,7 +23,7 @@ cloudinary.config(
     api_key=os.getenv("CLOUDINARY_API_KEY"),
     api_secret=os.getenv("CLOUDINARY_API_SECRET")
 )
-redis_client = redis.Redis(host=os.getenv("REDIS_HOST", "192.168.2.6"), port=6379, db=0, decode_responses=True)
+redis_client = redis.Redis(host=os.getenv("REDIS_HOST", "13.221.98.13"), port=6379, db=0, decode_responses=True)
 router = APIRouter()
 llm = ChatOpenAI(model="gpt-4o-mini")
 
