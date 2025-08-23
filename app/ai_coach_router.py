@@ -8,7 +8,15 @@ import json
 from app.graph_workflow import app_ai_coach_graph
 
 load_dotenv()
-redis_client = redis.Redis(host=os.getenv("REDIS_HOST", "13.221.98.13"), port=6379, db=0, decode_responses=True)
+redis_client = redis.Redis(
+    host=os.getenv("REDIS_HOST", "13.221.98.13"), 
+    port=6379, 
+    db=0, 
+    decode_responses=True,
+    socket_timeout=60,
+    socket_connect_timeout=30,
+    retry_on_timeout=True
+)
 
 router = APIRouter()
 
