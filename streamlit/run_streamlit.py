@@ -33,7 +33,7 @@ def check_dependencies():
 
 
 def check_model():
-    """Check if YOLO model exists."""
+    """Check if YOLO models exists."""
     model_path = "models/yolopose_v1.pt"
     
     if not os.path.exists(model_path):
@@ -71,7 +71,7 @@ def main():
     
     print()
     
-    # Check model
+    # Check models
     if not check_model():
         return
     

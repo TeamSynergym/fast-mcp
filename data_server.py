@@ -74,7 +74,7 @@ def plot_histogram(csv_path: str, column: str, bins: int = 10) -> str:
 @mcp.tool()
 def model(csv_path: str, x_columns: list, y_column: str) -> dict:
   """
-  Automatically train a model (classification or regression) based on the target column type.
+  Automatically train a models (classification or regression) based on the target column type.
 
   Args:
     csv_path(str): The file path to the CSV file.
@@ -82,7 +82,7 @@ def model(csv_path: str, x_columns: list, y_column: str) -> dict:
     y_column(str): The target column name.
 
   Returns:
-    Dictionary with model type, performance metric and score.
+    Dictionary with models type, performance metric and score.
   """
   df = pd.read_csv(csv_path)
 
