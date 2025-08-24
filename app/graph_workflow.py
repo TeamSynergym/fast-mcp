@@ -164,7 +164,7 @@ def radar_chart_merge_node(state):
 
 def recommend_exercise_merge_node(state):
     diagnosis = posture_analyzer.generate_ollama_diagnosis(state["pose_data_for_diag"], "merge")
-    rec_result = recommend_node(diagnosis.get("korean", ""), vector_db, llm)
+    rec_result = recommend_exercise(diagnosis.get("korean", ""), vector_db, llm)
     recommended_exercise = rec_result.get("recommended_exercise", {})
     search_query = rec_result.get("search_query", "")
     return {
