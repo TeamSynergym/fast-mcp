@@ -7,7 +7,7 @@ import uvicorn
 
 from app.analyze_router import router as analyze_router
 from app.ai_coach_router import router as ai_coach_router
-from app.youtube_router import router as youtube_router
+# from app.youtube_router import router as youtube_router  # YouTube 기능 주석처리
 from app.goal_setting_router import router as goal_setting_router
 from app.recommendation_router import router as recommendation_router
 from app.emotion_router import router as emotion_router
@@ -21,7 +21,7 @@ app = FastAPI(
 
 app.include_router(analyze_router)
 app.include_router(ai_coach_router)
-app.include_router(youtube_router)
+# app.include_router(youtube_router)  # YouTube 기능 주석처리
 app.include_router(goal_setting_router)
 app.include_router(recommendation_router)
 app.include_router(emotion_router)

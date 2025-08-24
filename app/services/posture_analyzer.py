@@ -518,7 +518,7 @@ class PostureAnalyzer:
             url = "http://localhost:11434/api/chat"  # Update to the correct endpoint
             headers = {"Content-Type": "application/json"}
             payload = {
-                "model": self.ollama_model,
+                "models": self.ollama_model,
                 "messages": [{"role": "user", "content": full_prompt}]
             }
             response = requests.post(url, json=payload, headers=headers, stream=True)

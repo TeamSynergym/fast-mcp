@@ -111,7 +111,7 @@ def create_test_directory():
     print(f"📁 Created test directory: {test_dir}")
     print(f"📁 Created models directory: {models_dir}")
     print("\n📝 Next steps:")
-    print("1. Place your yolopose_v1.pt model in the models/ directory")
+    print("1. Place your yolopose_v1.pt models in the models/ directory")
     print("2. Add some test images to data/test_images/ directory")
     print("3. Run the test script")
 
@@ -123,11 +123,11 @@ if __name__ == "__main__":
     # Create test directories
     create_test_directory()
     
-    # Check if model exists
+    # Check if models exists
     model_path = "models/yolopose_v1.pt"
     if not os.path.exists(model_path):
         print(f"\n⚠️  Model not found at {model_path}")
-        print("Please place your yolopose_v1.pt model in the models/ directory")
+        print("Please place your yolopose_v1.pt models in the models/ directory")
         exit(1)
     
     # Run tests

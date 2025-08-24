@@ -18,29 +18,29 @@ def main():
     )
     
     st.title("🧍 Posture Analysis with YOLO")
-    st.markdown("Upload an image to analyze posture using your trained YOLO model")
+    st.markdown("Upload an image to analyze posture using your trained YOLO models")
     
-    # Sidebar for model path
+    # Sidebar for models path
     st.sidebar.header("⚙️ Settings")
     model_path = st.sidebar.text_input(
         "Model Path", 
         value="models/yolopose_v1.pt",
-        help="Path to your trained YOLO pose model"
+        help="Path to your trained YOLO pose models"
     )
     
-    # Check if model exists
+    # Check if models exists
     if not os.path.exists(model_path):
         st.error(f"❌ Model not found at: {model_path}")
-        st.info("Please place your yolopose_v1.pt model in the models/ directory")
+        st.info("Please place your yolopose_v1.pt models in the models/ directory")
         return
     
     # Initialize analyzer
     try:
         analyzer = PostureAnalyzer(model_path=model_path)
         visualizer = PoseVisualizer()
-        st.success("✅ YOLO model loaded successfully!")
+        st.success("✅ YOLO models loaded successfully!")
     except Exception as e:
-        st.error(f"❌ Error loading model: {e}")
+        st.error(f"❌ Error loading models: {e}")
         return
     
     # Main content area

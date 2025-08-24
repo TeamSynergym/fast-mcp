@@ -29,9 +29,18 @@ class AiCoachRequest(BaseModel):
     class Config:
         allow_population_by_field_name = True
 
+class ExerciseInfo(BaseModel):
+    name: str
+    thumbnail_url: str = None
+    description: str = None
+    url: str = None
+    difficulty: str = None
+    category: str = None
+
 class AiCoachResponse(BaseModel):
     type: str
     response: str
+    exercise_info: ExerciseInfo = None
     history: list = None
 
 @router.post("/ai-coach")
@@ -45,4 +54,12 @@ async def ai_coach_endpoint(request: AiCoachRequest):
     result = app_ai_coach_graph.invoke(input_data)
     if "error" in result:
         raise HTTPException(status_code=400, detail=result["error"])
-    return result 
+    
+    # 응답에 운동 정보 포함
+    response_data = {
+        "type": "ai_coach",
+        "response": result.get("response", ""),  # ai_coach_response -> response로 수정
+        "exercise_info": result.get("exercise_info")
+    }
+    
+    return response_data 

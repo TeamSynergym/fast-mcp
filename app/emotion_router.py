@@ -26,7 +26,7 @@ try:
     emotion_classifier = pipeline("text-classification", model="iuj92/synergym_emotion", tokenizer="iuj92/synergym_emotion")
 except Exception as e:
     emotion_classifier = None
-    print(f"Error model!!:{e}")
+    print(f"Error models!!:{e}")
 
 
 router = APIRouter()
@@ -35,7 +35,7 @@ router = APIRouter()
 @router.post("/emotion", response_model=EmotionResponse)
 def classify_emotion(request: EmotionRequest):
     if not emotion_classifier:
-        raise HTTPException(status_code=500, detail="Emotion classifier model error!!")
+        raise HTTPException(status_code=500, detail="Emotion classifier models error!!")
 
     # 💡 변경점 1: 빈 메모에 대한 예외 처리 추가
     # memo가 비어있거나 공백만 있으면 'NEUTRAL'을 기본값으로 반환합니다.
